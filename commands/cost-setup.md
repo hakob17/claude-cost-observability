@@ -10,7 +10,14 @@ Follow these steps in order:
 
 2. **Choose a destination** with AskUserQuestion:
    - **Local file** — usage rows are appended to a CSV file on this machine. No sign-in, no admin setup. The file path is configurable, so it can point at a synced folder (OneDrive, network share) to share it with the team.
+   - **Team sync server** — rows are uploaded to the team's cost-observability server (the `server/` app in this repo) which stores them in a database and serves an analytics dashboard. Needs only the server URL and an ingest token from whoever runs the server.
    - **SharePoint List** — rows are uploaded to a central SharePoint List via Microsoft Graph. Requires a one-time Azure AD app registration by an admin.
+
+2b. **If "Team sync server" was selected:**
+   - Ask for the **server URL** (e.g. `https://cost.internal.company.com` or `http://10.0.0.5:8321`) and the **ingest token** (generated on the server with `python3 manage.py add-token <name>`).
+   - Ask (optional) for `user_email`; defaults to `git config --global user.email`.
+   - Write the config JSON with: `destination: "server"`, `server_url`, `server_token`, `user_email` (if given), `enabled: true`. Merge with any existing config.
+   - Verify: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" test` and confirm success. Done — do NOT ask for tenant/client IDs or run any Microsoft sign-in.
 
 3. **If "Local file" was selected:**
    - Ask (optional) for the CSV path; default is `~/.claude/cost-observability/usage.csv`. Expand `~` before saving.

@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+server/.venv/
+server/*.db
+server/*.db-*

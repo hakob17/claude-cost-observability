@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cost Observatory</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:ital,wght@0,300;0,400;0,600;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="crt"></div>
+
+<!-- ============================== LOGIN ============================== -->
+<main id="login-view" class="login hidden">
+  <div class="login-card">
+    <p class="login-eyebrow">// AUTHORIZATION REQUIRED</p>
+    <h1 class="login-title">Cost <em>Observatory</em></h1>
+    <p class="login-sub">Claude Code usage telemetry &mdash; authorized personnel only</p>
+    <form id="login-form" autocomplete="on">
+      <label for="username">OPERATOR</label>
+      <input id="username" name="username" type="text" autocomplete="username" required>
+      <label for="password">PASSPHRASE</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <p id="login-error" class="login-error" hidden>ACCESS DENIED — check credentials</p>
+      <button type="submit">AUTHENTICATE <span class="cursor">▊</span></button>
+    </form>
+  </div>
+  <p class="login-foot">cost-observability // internal telemetry console</p>
+</main>
+
+<!-- ============================ DASHBOARD ============================ -->
+<main id="dash-view" class="dash hidden">
+  <header class="dash-head">
+    <div>
+      <h1 class="dash-title">Cost <em>Observatory</em><span class="cursor">▊</span></h1>
+      <p class="dash-sub">Claude Code usage telemetry &middot; API-equivalent pricing &middot;
+        <span id="who"></span></p>
+    </div>
+    <div class="dash-controls">
+      <div class="seg" id="days-seg">
+        <button data-days="7">7D</button>
+        <button data-days="30" class="on">30D</button>
+        <button data-days="90">90D</button>
+      </div>
+      <button id="logout" class="ghost">LOG OUT</button>
+    </div>
+  </header>
+
+  <p class="ticker" id="ticker">── SYNCING ──</p>
+
+  <section class="tiles">
+    <div class="tile tile-hero">
+      <p class="tile-label">API-EQUIV COST</p>
+      <p class="tile-num" id="t-cost">—</p>
+      <p class="tile-foot">tokens × pay-as-you-go rates<br>subscription users pay flat fee</p>
+    </div>
+    <div class="tile"><p class="tile-label">TOKENS IN</p><p class="tile-num" id="t-in">—</p><p class="tile-foot">incl. cache read/write</p></div>
+    <div class="tile"><p class="tile-label">TOKENS OUT</p><p class="tile-num" id="t-out">—</p><p class="tile-foot">generated</p></div>
+    <div class="tile"><p class="tile-label">SESSIONS</p><p class="tile-num" id="t-sessions">—</p><p class="tile-foot">tracked</p></div>
+    <div class="tile"><p class="tile-label">DEVELOPERS</p><p class="tile-num" id="t-users">—</p><p class="tile-foot">reporting</p></div>
+  </section>
+
+  <section class="panel">
+    <h2 class="panel-title">── SPEND BY DAY ─────────────────────────</h2>
+    <div id="chart-days" class="daychart"></div>
+  </section>
+
+  <section class="cols">
+    <div class="panel">
+      <h2 class="panel-title">── BY MODEL ────────────</h2>
+      <div id="chart-model" class="bars"></div>
+    </div>
+    <div class="panel">
+      <h2 class="panel-title">── BY DEVELOPER ────────</h2>
+      <div id="chart-user" class="bars bars-amber"></div>
+    </div>
+    <div class="panel">
+      <h2 class="panel-title">── BY PROJECT ──────────</h2>
+      <div id="chart-project" class="bars"></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-row">
+      <h2 class="panel-title">── RECENT TURNS ─────────────────────────</h2>
+      <div class="export">
+        <span class="export-label">EXPORT</span>
+        <select id="export-format">
+          <option value="xlsx">Excel (.xlsx)</option>
+          <option value="csv">CSV</option>
+          <option value="json">JSON</option>
+        </select>
+        <button id="export-btn">⭳ DOWNLOAD</button>
+      </div>
+    </div>
+    <div class="tablewrap">
+      <table id="rows-table">
+        <thead><tr>
+          <th>TIME (UTC)</th><th>DEVELOPER</th><th>PROJECT</th><th>MODEL</th>
+          <th class="r">IN</th><th class="r">OUT</th><th class="r">COST</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer class="dash-foot">
+    cost-observability &middot; figures are API list-price equivalents, not invoices
+  </footer>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

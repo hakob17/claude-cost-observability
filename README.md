@@ -3,12 +3,17 @@
 Tracks every developer's Claude Code LLM usage (tokens + estimated USD cost) and
 aggregates it in one place — cost per developer, per project, per model, per day.
 
-Two destinations, chosen during setup:
+Three destinations, chosen during setup:
 
 | Destination | Setup effort | Best for |
 |---|---|---|
 | **Local CSV file** (default) | none — works out of the box, no sign-in | individuals, or teams sharing via a synced folder (OneDrive / network share) |
-| **SharePoint List** | one-time Azure AD app registration by an admin | a true central team dashboard (Excel / Power BI on top) |
+| **Team sync server** | run the bundled [`server/`](server/README.md) app (FastAPI + SQLite) | central DB + the **Cost Observatory** analytics dashboard with login and Excel/CSV/JSON export |
+| **SharePoint List** | one-time Azure AD app registration by an admin | Microsoft 365 shops that want the data in SharePoint (Excel / Power BI on top) |
+
+For the sync server, developers enter just the server URL and an ingest token
+during `/cost-setup`; see [server/README.md](server/README.md) for running the
+server, creating dashboard users, and the API.
 
 ---
 

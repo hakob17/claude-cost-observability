@@ -109,12 +109,18 @@ def load_config():
 
 
 def destination(cfg):
-    """'local' (CSV file, no auth) or 'sharepoint' (Graph upload).
+    """'local' (CSV, no auth), 'server' (team sync server), or 'sharepoint'.
 
-    Defaults to 'sharepoint' when a list is already configured (back-compat),
-    otherwise 'local' — so the plugin is useful with zero setup.
+    Defaults follow existing config (back-compat), otherwise 'local' — so the
+    plugin is useful with zero setup.
     """
-    return cfg.get("destination") or ("sharepoint" if cfg.get("list_id") else "local")
+    if cfg.get("destination"):
+        return cfg["destination"]
+    if cfg.get("list_id"):
+        return "sharepoint"
+    if cfg.get("server_url"):
+        return "server"
+    return "local"
 
 
 def local_file(cfg):
@@ -255,6 +261,7 @@ def enqueue_session(session_id, cfg):
             continue
         delta = {k: max(0, v) for k, v in delta.items()}
         row = {
+            "row_id": uuid.uuid4().hex,
             "timestamp": now_iso(),
             "session_id": session_id,
             "user_email": email,
@@ -457,6 +464,16 @@ def append_local(cfg, row):
         return {"error": {"code": "local_write", "message": str(e)}}
 
 
+def push_row_server(cfg, row):
+    """POST one row to the team sync server; returns error dict or None."""
+    _, err = http_json(
+        cfg["server_url"].rstrip("/") + "/api/ingest",
+        {"rows": [row]},
+        headers={"Authorization": f"Bearer {cfg['server_token']}"},
+    )
+    return err
+
+
 def flush_queue(verbose=False):
     cfg = load_config()
     if not cfg.get("enabled", True):
@@ -471,7 +488,13 @@ def flush_queue(verbose=False):
 
     dest = destination(cfg)
     token = None
-    if dest == "sharepoint":
+    if dest == "server":
+        if not cfg.get("server_url") or not cfg.get("server_token"):
+            log("flush skipped: server config incomplete")
+            if verbose:
+                print("Server config incomplete — run /cost-setup.")
+            return 0
+    elif dest == "sharepoint":
         if not all(cfg.get(k) for k in ("tenant_id", "client_id", "site_id", "list_id")):
             log("flush skipped: sharepoint config incomplete")
             if verbose:
@@ -495,7 +518,12 @@ def flush_queue(verbose=False):
         if not row:
             inflight.unlink(missing_ok=True)
             continue
-        err = append_local(cfg, row) if dest == "local" else push_row(cfg, token, row)
+        if dest == "local":
+            err = append_local(cfg, row)
+        elif dest == "server":
+            err = push_row_server(cfg, row)
+        else:
+            err = push_row(cfg, token, row)
         if err:
             os.rename(inflight, p)  # keep for next flush
             log(f"push failed for {p.name}: {json.dumps(err)[:300]}")
@@ -503,7 +531,7 @@ def flush_queue(verbose=False):
             inflight.unlink(missing_ok=True)
             pushed += 1
     if pushed:
-        target = str(local_file(cfg)) if dest == "local" else "SharePoint"
+        target = {"local": str(local_file(cfg)), "server": cfg.get("server_url", "server")}.get(dest, "SharePoint")
         log(f"pushed {pushed} row(s) to {target}")
     if verbose:
         print(f"Pushed {pushed} row(s); {len(list(QUEUE_DIR.glob('*.json')))} remaining in queue.")
@@ -594,6 +622,15 @@ def cmd_test(_args):
         if err:
             raise SystemExit(f"Test write FAILED: {err}")
         print(f"Test row written to {local_file(cfg)}")
+        return 0
+    if destination(cfg) == "server":
+        if not cfg.get("server_url") or not cfg.get("server_token"):
+            raise SystemExit("Server config incomplete — set server_url and server_token.")
+        row["row_id"] = uuid.uuid4().hex
+        err = push_row_server(cfg, row)
+        if err:
+            raise SystemExit(f"Test push FAILED: {err}")
+        print(f"Test row pushed to {cfg['server_url']} — check the dashboard.")
         return 0
     token = get_token()
     if not token:
@@ -747,6 +784,9 @@ def cmd_status(_args):
     if dest == "local":
         p = local_file(cfg)
         print(f"  local_file  : {p} ({'exists' if p.exists() else 'will be created'})")
+    elif dest == "server":
+        print(f"  server_url  : {cfg.get('server_url') or 'NOT SET'}")
+        print(f"  server_token: {'set' if cfg.get('server_token') else 'NOT SET'}")
     else:
         for k in ("tenant_id", "client_id", "site_id", "list_id"):
             print(f"  {k:<12}: {'set' if cfg.get(k) else 'NOT SET'}")
