@@ -630,10 +630,46 @@ def handle_hook():
 
 # ---------------------------------------------------------------- reporting
 
+def live_rows(cutoff):
+    """Usage from sessions still open (or not yet flushed): state minus pushed."""
+    rows = []
+    if not STATE_DIR.is_dir():
+        return rows
+    for p in STATE_DIR.glob("*.json"):
+        st = load_json(p)
+        if not st:
+            continue
+        try:
+            ts = datetime.fromisoformat(st.get("updated_at", "")).timestamp()
+        except ValueError:
+            continue
+        if ts < cutoff:
+            continue
+        pushed = st.get("pushed", {})
+        for model, t in st.get("totals", {}).items():
+            prev = pushed.get(model, {})
+            delta = {k: max(0, t.get(k, 0) - prev.get(k, 0)) for k in FIELDS}
+            if all(v <= 0 for k, v in delta.items() if k != "turns"):
+                continue
+            rows.append({
+                "timestamp": st.get("updated_at"),
+                "session_id": st.get("session_id", p.stem),
+                "project": Path(st.get("cwd") or ".").name,
+                "model": model,
+                "input_tokens": delta["input"],
+                "output_tokens": delta["output"],
+                "cache_read_tokens": delta["cache_read"],
+                "cache_write_tokens": delta["cache_5m"] + delta["cache_1h"],
+                "turns": delta["turns"],
+                "cost_usd": compute_cost(model, delta),
+            })
+    return rows
+
+
 def cmd_report(args):
+    cutoff = time.time() - args.days * 86400
     rows = []
     if LEDGER_PATH.exists():
-        cutoff = time.time() - args.days * 86400
         with open(LEDGER_PATH) as f:
             for line in f:
                 try:
@@ -643,6 +679,8 @@ def cmd_report(args):
                         rows.append(r)
                 except (json.JSONDecodeError, KeyError, ValueError):
                     continue
+    live = live_rows(cutoff)
+    rows.extend(live)
     if not rows:
         print(f"No usage recorded locally in the last {args.days} day(s).")
         return 0
@@ -660,7 +698,12 @@ def cmd_report(args):
 
     total = sum(r.get("cost_usd") or 0 for r in rows)
     print(f"Claude Code usage — last {args.days} day(s) (this machine)")
-    print(f"Total estimated cost: ${total:.2f}\n")
+    print(f"Total estimated cost: ${total:.2f}")
+    if live:
+        live_cost = sum(r.get("cost_usd") or 0 for r in live)
+        print(f"(includes ${live_cost:.2f} from {len({r['session_id'] for r in live})} "
+              f"session(s) still open / not yet flushed)")
+    print()
     for title, keyfn in (("By model", lambda r: r["model"]),
                          ("By project", lambda r: r["project"]),
                          ("By day", lambda r: r["timestamp"][:10])):
