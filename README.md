@@ -151,7 +151,35 @@ Or auto-install for everyone working in a repo by committing this to that repo's
 > `py`) or Store (`python`, `python3`) layout works. Native Windows, the
 > desktop app, and WSL are all supported; no WSL required.
 
-### 2. Run setup (each developer, once)
+### Windows troubleshooting — `/plugin marketplace add` fails with a `<username>.claude` path
+
+If adding the marketplace on native Windows errors on a path like
+`C:\Users\<username>.claude\plugins\...` (the username glued to `.claude`
+instead of `C:\Users\<username>\.claude`), that's Claude Code resolving **its
+own** config directory — not this plugin. Two fixes, try in order:
+
+1. **Check for a stray `HOME` variable** (often set by Git for Windows):
+   ```powershell
+   echo $env:USERPROFILE   # expect C:\Users\<username>
+   echo $env:HOME          # if set to anything, that's likely the cause
+   ```
+   Unset it (PowerShell, permanent), then reopen the terminal:
+   ```powershell
+   [Environment]::SetEnvironmentVariable("HOME", $null, "User")
+   ```
+   cmd.exe (current session): `set HOME=`
+
+2. **If `HOME` is already empty/correct**, it's a Claude Code Windows path bug —
+   **upgrade Claude Code** (`claude update` / reinstall the latest) which is the
+   durable fix, or run Claude Code under **WSL** as a fallback.
+
+Also note: Windows usernames containing a **period** (`first.last`) or **space**
+trigger related Claude Code path issues on native Windows — WSL avoids those too.
+
+Once the `.claude` directory resolves correctly, everything else in this plugin
+works normally (its runtime uses Python's `Path.home()`, which is unaffected).
+
+### Run setup (each developer, once)
 
 ```
 /cost-setup
