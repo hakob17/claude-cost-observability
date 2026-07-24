@@ -8,7 +8,7 @@ Three destinations, chosen during setup:
 | Destination | Setup effort | Best for |
 |---|---|---|
 | **Local CSV file** (default) | none — works out of the box, no sign-in | individuals, or teams sharing via a synced folder (OneDrive / network share) |
-| **Team sync server** | run the bundled [`server/`](server/README.md) app (FastAPI + SQLite) | central DB + the **Cost Observatory** analytics dashboard with login and Excel/CSV/JSON export |
+| **Team sync server** | run the bundled [`server/`](server/README.md) app (FastAPI + Postgres/SQLite) | central DB + the **Cost Observatory** analytics dashboard with login and Excel/CSV/JSON export. Deployed on Railway: https://claude-cost-observability-production.up.railway.app |
 | **SharePoint List** | one-time Azure AD app registration by an admin | Microsoft 365 shops that want the data in SharePoint (Excel / Power BI on top) |
 
 For the sync server, developers enter just the server URL and an ingest token

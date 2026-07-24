@@ -4,7 +4,18 @@ A small FastAPI + SQLite service the plugin can sync usage rows to, with an
 authenticated analytics dashboard ("Cost Observatory") and data export in
 Excel / CSV / JSON.
 
-## Run it
+## Storage backends
+
+The server auto-selects its database:
+
+- **`DATABASE_URL` set** → PostgreSQL (used in production / on Railway).
+- **not set** → a local SQLite file (great for dev; override the path with
+  `COST_OBS_DB=/path/to/db.sqlite`).
+
+The code is identical either way — timestamps are stored as ISO-8601 UTC
+strings, so the same queries run on both.
+
+## Run it locally (SQLite)
 
 ```bash
 cd server
@@ -17,9 +28,32 @@ export COST_OBS_ADMIN_PASSWORD='choose-a-strong-password'   # enables dashboard 
 uvicorn app:app --host 0.0.0.0 --port 8321
 ```
 
-Open `http://<host>:8321` → log in as the admin → dashboard. Deploy behind
-HTTPS (reverse proxy) for anything beyond a trusted LAN. The SQLite file
-location can be overridden with `COST_OBS_DB=/path/to/db.sqlite`.
+Open `http://<host>:8321` → log in as the admin → dashboard.
+
+## Deploy on Railway (PostgreSQL)
+
+Already deployed at
+**https://claude-cost-observability-production.up.railway.app**. To reproduce
+from scratch:
+
+```bash
+cd server
+railway init --name claude-cost-observability     # create the project
+railway add --database postgres                    # provision PostgreSQL
+railway link --service claude-cost-observability   # link the web service
+
+# reference the Postgres URL + set the admin password (generate a strong one)
+railway variables --service claude-cost-observability \
+  --set 'DATABASE_URL=${{Postgres.DATABASE_URL}}' \
+  --set 'COST_OBS_ADMIN_PASSWORD=<strong-password>'
+
+railway up --service claude-cost-observability     # build & deploy
+railway domain                                     # public HTTPS URL
+```
+
+Railway builds from `requirements.txt` and starts via the `Procfile`
+(`uvicorn app:app --host 0.0.0.0 --port $PORT`). Redeploy after code changes
+with `railway up`. Postgres persists across redeploys — no volume needed.
 
 ## Auth model — one admin, everyone else sends data
 
