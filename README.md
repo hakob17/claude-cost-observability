@@ -42,6 +42,16 @@ Claude Code session (developer's machine)
    cache-read at 0.1×, cache-write at 1.25×/2× input price, per million tokens).
    Update `PRICING` in [`scripts/track_usage.py`](scripts/track_usage.py) when
    Anthropic pricing changes.
+
+   > **⚠️ "Cost" means API-equivalent cost, not your bill.** The plugin
+   > multiplies exact token counts by Anthropic's pay-as-you-go API list
+   > prices. If developers use API keys, this approximates real spend. If they
+   > are on **subscription plans (Pro/Max)**, actual spend is the flat monthly
+   > fee no matter what this number says — a $100/month plan can easily show
+   > $1,000+ of API-equivalent usage (Claude Code re-reads the whole
+   > conversation from cache on every turn, so cached-input tokens dominate).
+   > Use the numbers for per-developer/project comparison and for answering
+   > "what would this cost on API billing?" — not as an invoice.
 3. **Delivering** — when the session ends, the `SessionEnd` hook computes the
    *delta* since the last upload and writes one row per model to the configured
    destination: appended to the local CSV, or pushed to the SharePoint List

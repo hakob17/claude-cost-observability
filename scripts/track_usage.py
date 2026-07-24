@@ -48,6 +48,9 @@ SCOPES = "https://graph.microsoft.com/Sites.ReadWrite.All offline_access openid 
 
 # USD per 1M tokens: (input, output). Longest matching prefix wins.
 # Cache read = 0.1x input; cache write = 1.25x (5m TTL) / 2x (1h TTL) input.
+# NOTE: these are pay-as-you-go API list prices. The computed cost is an
+# "API-equivalent" value — subscription (Pro/Max) users actually pay a flat
+# monthly fee, so treat cost_usd as a comparison/allocation metric, not a bill.
 PRICING = [
     ("claude-fable-5", 10.0, 50.0),
     ("claude-mythos-5", 10.0, 50.0),
@@ -703,11 +706,14 @@ def cmd_report(args):
 
     total = sum(r.get("cost_usd") or 0 for r in rows)
     print(f"Claude Code usage — last {args.days} day(s) (this machine)")
-    print(f"Total estimated cost: ${total:.2f}")
+    print(f"Total API-equivalent cost: ${total:.2f}")
     if live:
         live_cost = sum(r.get("cost_usd") or 0 for r in live)
         print(f"(includes ${live_cost:.2f} from {len({r['session_id'] for r in live})} "
               f"session(s) still open / not yet flushed)")
+    print("Note: costs are API list-price equivalents (tokens x pay-as-you-go rates).")
+    print("On a subscription plan (Pro/Max) your actual spend is the flat monthly fee;")
+    print("use these numbers for relative comparison and API-vs-plan budgeting.")
     print()
     for title, keyfn in (("By model", lambda r: r["model"]),
                          ("By project", lambda r: r["project"]),
