@@ -1,59 +1,108 @@
-"""SQLite storage for the cost-observability sync server."""
+"""Storage for the cost-observability sync server.
+
+Uses PostgreSQL when DATABASE_URL is set (Railway provides it), otherwise a
+local SQLite file. Timestamps are stored as ISO-8601 UTC strings and compared
+lexicographically, so date filtering is identical on both backends.
+"""
 
 import os
 import secrets
-import sqlite3
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+PG = bool(DATABASE_URL)
 
 DB_PATH = Path(os.environ.get("COST_OBS_DB", str(Path(__file__).parent / "cost_obs.db")))
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS usage_rows (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    row_id TEXT UNIQUE,
-    ts TEXT NOT NULL,
-    session_id TEXT,
-    user_email TEXT,
-    host TEXT,
-    project TEXT,
-    model TEXT,
-    input_tokens INTEGER DEFAULT 0,
-    output_tokens INTEGER DEFAULT 0,
-    cache_read_tokens INTEGER DEFAULT 0,
-    cache_write_tokens INTEGER DEFAULT 0,
-    turns INTEGER DEFAULT 0,
-    cost_usd REAL,
-    received_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_rows_ts ON usage_rows (ts);
-CREATE INDEX IF NOT EXISTS idx_rows_user ON usage_rows (user_email);
+if PG:
+    import psycopg
+    from psycopg.rows import dict_row
 
-CREATE TABLE IF NOT EXISTS sessions (
-    token TEXT PRIMARY KEY,
-    username TEXT NOT NULL,
-    expires_at REAL NOT NULL
-);
+    # Railway sometimes hands out postgres:// — psycopg wants postgresql://
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = "postgresql://" + DATABASE_URL[len("postgres://"):]
+    _ID = "id BIGSERIAL PRIMARY KEY"
+else:
+    import sqlite3
+    _ID = "id INTEGER PRIMARY KEY AUTOINCREMENT"
 
-CREATE TABLE IF NOT EXISTS api_tokens (
-    token TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'ingest',
-    created_at REAL NOT NULL
-);
-"""
+SCHEMA = [
+    f"""CREATE TABLE IF NOT EXISTS usage_rows (
+        {_ID},
+        row_id TEXT UNIQUE,
+        ts TEXT NOT NULL,
+        session_id TEXT,
+        user_email TEXT,
+        host TEXT,
+        project TEXT,
+        model TEXT,
+        input_tokens BIGINT DEFAULT 0,
+        output_tokens BIGINT DEFAULT 0,
+        cache_read_tokens BIGINT DEFAULT 0,
+        cache_write_tokens BIGINT DEFAULT 0,
+        turns BIGINT DEFAULT 0,
+        cost_usd DOUBLE PRECISION,
+        received_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_rows_ts ON usage_rows (ts)",
+    "CREATE INDEX IF NOT EXISTS idx_rows_user ON usage_rows (user_email)",
+    """CREATE TABLE IF NOT EXISTS sessions (
+        token TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        expires_at DOUBLE PRECISION NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS api_tokens (
+        token TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'ingest',
+        created_at DOUBLE PRECISION NOT NULL
+    )""",
+]
 
 
 def connect():
+    if PG:
+        return psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 
+def _q(sql):
+    """Translate ?-style placeholders to %s for psycopg."""
+    return sql.replace("?", "%s") if PG else sql
+
+
+def _rows(conn, sql, params=()):
+    if PG:
+        with conn.cursor() as cur:
+            cur.execute(_q(sql), params)
+            return cur.fetchall()
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def _exec(conn, sql, params=()):
+    """Execute a write; return affected row count."""
+    if PG:
+        with conn.cursor() as cur:
+            cur.execute(_q(sql), params)
+            return cur.rowcount
+    cur = conn.execute(sql, params)
+    return cur.rowcount
+
+
 def init_db():
-    with connect() as conn:
-        conn.executescript(SCHEMA)
+    conn = connect()
+    try:
+        for stmt in SCHEMA:
+            _exec(conn, stmt)
+        if not PG:
+            conn.commit()
+    finally:
+        conn.close()
 
 
 # ------------------------------------------------------------------ auth
@@ -73,64 +122,67 @@ def verify_admin(username, password):
         secrets.compare_digest(password, expected)
 
 
+def _write(sql, params=()):
+    conn = connect()
+    try:
+        n = _exec(conn, sql, params)
+        if not PG:
+            conn.commit()
+        return n
+    finally:
+        conn.close()
+
+
+def _read(sql, params=()):
+    conn = connect()
+    try:
+        return _rows(conn, sql, params)
+    finally:
+        conn.close()
+
+
 def create_session(username, ttl_days=7):
     token = secrets.token_urlsafe(32)
-    with connect() as conn:
-        conn.execute("DELETE FROM sessions WHERE expires_at < ?", (time.time(),))
-        conn.execute(
-            "INSERT INTO sessions (token, username, expires_at) VALUES (?,?,?)",
-            (token, username, time.time() + ttl_days * 86400),
-        )
+    _write("DELETE FROM sessions WHERE expires_at < ?", (time.time(),))
+    _write("INSERT INTO sessions (token, username, expires_at) VALUES (?,?,?)",
+           (token, username, time.time() + ttl_days * 86400))
     return token
 
 
 def session_user(token):
     if not token:
         return None
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT username FROM sessions WHERE token=? AND expires_at > ?",
-            (token, time.time()),
-        ).fetchone()
-    return row["username"] if row else None
+    rows = _read("SELECT username FROM sessions WHERE token=? AND expires_at > ?",
+                 (token, time.time()))
+    return rows[0]["username"] if rows else None
 
 
 def drop_session(token):
-    with connect() as conn:
-        conn.execute("DELETE FROM sessions WHERE token=?", (token,))
+    _write("DELETE FROM sessions WHERE token=?", (token,))
 
 
 def create_api_token(name, role="ingest"):
     token = "cot_" + secrets.token_urlsafe(32)
-    with connect() as conn:
-        conn.execute(
-            "INSERT INTO api_tokens (token, name, role, created_at) VALUES (?,?,?,?)",
-            (token, name, role, time.time()),
-        )
+    _write("INSERT INTO api_tokens (token, name, role, created_at) VALUES (?,?,?,?)",
+           (token, name, role, time.time()))
     return token
 
 
 def token_role(token):
     if not token:
         return None
-    with connect() as conn:
-        row = conn.execute("SELECT role FROM api_tokens WHERE token=?", (token,)).fetchone()
-    return row["role"] if row else None
+    rows = _read("SELECT role FROM api_tokens WHERE token=?", (token,))
+    return rows[0]["role"] if rows else None
 
 
 def list_tokens():
-    with connect() as conn:
-        return [
-            {"name": r["name"], "role": r["role"],
-             "prefix": r["token"][:12], "created_at": r["created_at"]}
-            for r in conn.execute("SELECT * FROM api_tokens ORDER BY created_at DESC")
-        ]
+    rows = _read("SELECT name, role, token, created_at FROM api_tokens ORDER BY created_at DESC")
+    return [{"name": r["name"], "role": r["role"],
+             "prefix": r["token"][:12], "created_at": r["created_at"]} for r in rows]
 
 
 def delete_token(prefix):
-    with connect() as conn:
-        cur = conn.execute("DELETE FROM api_tokens WHERE substr(token, 1, 12) = ?", (prefix,))
-    return cur.rowcount
+    return _write("DELETE FROM api_tokens WHERE substr(token, 1, 12) = ?", (prefix,))
 
 
 # ------------------------------------------------------------------ rows
@@ -142,23 +194,32 @@ ROW_FIELDS = (
 )
 
 
+def _cutoff(days):
+    return (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat()
+
+
 def insert_rows(rows, received_at):
+    cols = ",".join(ROW_FIELDS) + ", received_at"
+    ph = ",".join("?" * (len(ROW_FIELDS) + 1))
+    conflict = "ON CONFLICT (row_id) DO NOTHING" if PG else ""
+    verb = "INSERT INTO" if PG else "INSERT OR IGNORE INTO"
+    sql = f"{verb} usage_rows ({cols}) VALUES ({ph}) {conflict}".strip()
+    conn = connect()
     inserted = 0
-    with connect() as conn:
+    try:
         for r in rows:
             vals = [r.get(f) for f in ROW_FIELDS] + [received_at]
-            cur = conn.execute(
-                f"INSERT OR IGNORE INTO usage_rows ({','.join(ROW_FIELDS)}, received_at) "
-                f"VALUES ({','.join('?' * (len(ROW_FIELDS) + 1))})",
-                vals,
-            )
-            inserted += cur.rowcount
+            inserted += _exec(conn, sql, vals)
+        if not PG:
+            conn.commit()
+    finally:
+        conn.close()
     return inserted
 
 
 def query_rows(days=30, user=None, project=None, limit=None):
-    q = "SELECT * FROM usage_rows WHERE ts >= datetime('now', ?)"
-    params = [f"-{int(days)} days"]
+    q = "SELECT * FROM usage_rows WHERE ts >= ?"
+    params = [_cutoff(days)]
     if user:
         q += " AND user_email = ?"
         params.append(user)
@@ -168,37 +229,46 @@ def query_rows(days=30, user=None, project=None, limit=None):
     q += " ORDER BY ts DESC"
     if limit:
         q += f" LIMIT {int(limit)}"
-    with connect() as conn:
-        return [dict(r) for r in conn.execute(q, params).fetchall()]
+    return _read(q, params)
 
 
 def stats(days=30):
-    where = "WHERE ts >= datetime('now', ?)"
-    p = [f"-{int(days)} days"]
-    with connect() as conn:
+    cutoff = _cutoff(days)
+    conn = connect()
+    try:
         def group(col):
-            return [dict(r) for r in conn.execute(
-                f"SELECT {col} AS key, ROUND(SUM(cost_usd), 4) AS cost, "
+            rows = _rows(conn,
+                f"SELECT {col} AS key, SUM(cost_usd) AS cost, "
                 f"SUM(input_tokens + cache_read_tokens + cache_write_tokens) AS tokens_in, "
                 f"SUM(output_tokens) AS tokens_out, COUNT(DISTINCT session_id) AS sessions "
-                f"FROM usage_rows {where} GROUP BY {col} ORDER BY cost DESC", p
-            ).fetchall()]
+                f"FROM usage_rows WHERE ts >= ? GROUP BY {col} ORDER BY cost DESC",
+                (cutoff,))
+            for r in rows:
+                r["cost"] = round(r["cost"] or 0, 4)
+            return rows
 
-        totals = dict(conn.execute(
-            f"SELECT ROUND(SUM(cost_usd), 2) AS cost, "
-            f"SUM(input_tokens + cache_read_tokens + cache_write_tokens) AS tokens_in, "
-            f"SUM(output_tokens) AS tokens_out, COUNT(DISTINCT session_id) AS sessions, "
-            f"COUNT(DISTINCT user_email) AS users, COUNT(*) AS rows "
-            f"FROM usage_rows {where}", p
-        ).fetchone())
-        by_day = [dict(r) for r in conn.execute(
-            f"SELECT substr(ts, 1, 10) AS key, ROUND(SUM(cost_usd), 4) AS cost "
-            f"FROM usage_rows {where} GROUP BY key ORDER BY key", p
-        ).fetchall()]
-    return {
-        "totals": totals,
-        "by_day": by_day,
-        "by_model": group("model"),
-        "by_user": group("user_email"),
-        "by_project": group("project"),
-    }
+        totals = _rows(conn,
+            "SELECT SUM(cost_usd) AS cost, "
+            "SUM(input_tokens + cache_read_tokens + cache_write_tokens) AS tokens_in, "
+            "SUM(output_tokens) AS tokens_out, COUNT(DISTINCT session_id) AS sessions, "
+            "COUNT(DISTINCT user_email) AS users, COUNT(*) AS rows "
+            "FROM usage_rows WHERE ts >= ?", (cutoff,))[0]
+        totals["cost"] = round(totals["cost"] or 0, 2)
+
+        by_day = _rows(conn,
+            "SELECT substr(ts, 1, 10) AS key, SUM(cost_usd) AS cost "
+            "FROM usage_rows WHERE ts >= ? GROUP BY substr(ts, 1, 10) ORDER BY key",
+            (cutoff,))
+        for r in by_day:
+            r["cost"] = round(r["cost"] or 0, 4)
+
+        result = {
+            "totals": totals,
+            "by_day": by_day,
+            "by_model": group("model"),
+            "by_user": group("user_email"),
+            "by_project": group("project"),
+        }
+    finally:
+        conn.close()
+    return result
