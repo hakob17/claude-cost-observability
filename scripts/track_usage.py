@@ -617,10 +617,15 @@ def handle_hook():
     try:
         totals = parse_transcript(tp)
         snapshot(session_id, payload, totals)
+        cfg = load_config()
+        # Enqueue on every turn (Stop), not just SessionEnd: a crashed
+        # machine/VDI then loses at most the response that was in flight.
+        enqueue_session(session_id, cfg)
         if event == "SessionEnd":
-            cfg = load_config()
-            enqueue_session(session_id, cfg)
             sweep_stale(cfg)
+        # Local CSV appends are instant — flush every turn. Network uploads
+        # (SharePoint) wait for SessionEnd to keep the Stop hook fast.
+        if destination(cfg) == "local" or event == "SessionEnd":
             if QUEUE_DIR.is_dir() and any(QUEUE_DIR.glob("*.json")):
                 flush_queue()
     except Exception as e:  # never break the user's session
@@ -711,6 +716,18 @@ def cmd_report(args):
         for k, a in sorted(agg(keyfn).items(), key=lambda kv: -kv[1]["cost"]):
             print(f"  {k:<40} ${a['cost']:>8.2f}   in {a['in']:>12,}  out {a['out']:>10,}  sessions {len(a['sessions'])}")
         print()
+
+    if args.turns:
+        recent = sorted(rows, key=lambda r: r.get("timestamp") or "")[-args.turns:]
+        print(f"Recent turns (last {len(recent)}):")
+        for r in recent:
+            ts = (r.get("timestamp") or "")[:19].replace("T", " ")
+            tokens_in = (r.get("input_tokens", 0) + r.get("cache_read_tokens", 0)
+                         + r.get("cache_write_tokens", 0))
+            print(f"  {ts}  {str(r.get('project', '?'))[:20]:<20} "
+                  f"{str(r.get('model', '?'))[:28]:<28} ${(r.get('cost_usd') or 0):>7.3f}  "
+                  f"in {tokens_in:>10,}  out {r.get('output_tokens', 0):>8,}  "
+                  f"sess {str(r.get('session_id', ''))[:8]}")
     return 0
 
 
@@ -753,6 +770,8 @@ def main():
     sub.add_parser("status")
     p = sub.add_parser("report")
     p.add_argument("--days", type=int, default=30)
+    p.add_argument("--turns", type=int, default=10,
+                   help="number of recent turn rows to list (0 to hide)")
     p = sub.add_parser("create-list")
     p.add_argument("--site-url", required=True)
     p.add_argument("--name", default="Claude Cost Tracking")

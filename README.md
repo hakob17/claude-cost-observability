@@ -17,20 +17,21 @@ Two destinations, chosen during setup:
 ```
 Claude Code session (developer's machine)
   │
-  │  Stop hook — fires after every Claude response (local only, fast)
-  │    └─ parses the session transcript → per-model token totals → snapshot
+  │  Stop hook — fires after every Claude response (local, fast)
+  │    └─ parses the session transcript → queues one row per turn
+  │       (local CSV mode: the row is appended immediately)
   │
   │  SessionEnd hook — fires when the session ends
-  │    └─ computes what's new since the last upload → queues a row
-  │       → writes queued rows to the configured destination
+  │    └─ flushes any queued rows to the destination (network uploads
+  │       happen here so the per-turn hook stays fast)
   ▼
 ┌───────────────────────────────┐   ┌─────────────────────────────────────┐
 │ Local CSV (destination=local) │ or │ SharePoint List (destination=       │
 │ ~/.claude/cost-observability/ │   │ sharepoint) via Microsoft Graph      │
 │ usage.csv — path configurable │   │ "Claude Cost Tracking"               │
 └───────────────────────────────┘   └─────────────────────────────────────┘
-  one row per (session, model):
-  user email · machine · project · input/output tokens · cache tokens · turns · cost USD
+  one row per (turn, model):
+  user email · machine · project · session · input/output tokens · cache tokens · cost USD
 ```
 
 1. **Recording** — Claude Code stores every session transcript locally as JSONL,
@@ -52,10 +53,12 @@ Claude Code session (developer's machine)
   developers install nothing beyond the plugin itself.
 - **Offline-safe** — if the upload fails (no network, expired sign-in), rows
   queue locally and are flushed on the next session end or via `/cost-sync`.
-- **Crash-safe** — sessions killed without a clean exit are swept into the
-  queue automatically after 24 h.
+- **Crash-safe** — every turn is recorded the moment the response finishes, so
+  a killed session, crashed VDI, or lost connection loses at most the single
+  response that was in flight. SharePoint rows queued by a crashed session are
+  uploaded the next time any session ends (or via `/cost-sync`).
 - **Resume-safe** — resumed sessions report only usage accrued since the last
-  upload, so nothing is double-counted.
+  recorded turn, so nothing is double-counted.
 - **Never breaks your session** — all hook errors are swallowed and logged to
   `~/.claude/cost-observability/log.txt`.
 
