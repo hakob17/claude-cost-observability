@@ -90,16 +90,24 @@ immediately stops that sender's uploads.
 | `POST /api/ingest` | ingest token | receive `{"rows": [...]}` from plugins (idempotent via `row_id`) |
 | `POST /api/login`, `/api/logout`, `GET /api/me` | — / cookie | admin session management |
 | `GET/POST /api/tokens`, `DELETE /api/tokens/{prefix}` | admin | list / generate / revoke ingest tokens |
-| `GET /api/stats?days=N` | viewer | totals + by day/model/developer/project |
-| `GET /api/rows?days=N&user=&project=&limit=` | viewer | raw rows |
-| `GET /api/export?format=xlsx|csv|json&days=N&user=&project=` | viewer | download the data |
+| `GET /api/stats?days=N` | admin | totals + by day/model/developer/project |
+| `GET /api/rows?days=N&user=&project=&limit=&order_by=&order=` | admin | raw rows, server-side sorted (`order_by`: ts, user, project, model, cost, in, out, turns) |
+| `GET /api/export?format=xlsx|csv|json&days=N&user=&project=` | admin | download the data |
 
 ## Analytics
 
-The dashboard shows: API-equivalent cost, tokens in/out, sessions, developer
-count; spend by day; top models / developers / projects; recent turns table;
-and export buttons (Excel, CSV, JSON) honoring the selected time window.
-For deeper analysis, query the SQLite database directly or pull
+The dashboard shows, over a selectable 7 / 30 / 90-day window:
+
+- **Totals** — API-equivalent cost, tokens in/out, sessions, developer count.
+- **Spend by day** — bar chart.
+- **Usage breakdown** — a **Group by** toggle (Developer / Project / Model /
+  Day) rendering a sortable table; click any column header (name, cost, tokens
+  in/out, sessions) to sort.
+- **Recent turns** — a table sortable by any column, sorted **server-side**
+  across the whole dataset (not just the visible page).
+- **Export** — one-click Excel / CSV / JSON honoring the time window.
+
+For deeper analysis, query the database directly or pull
 `/api/export?format=json` into your BI tool with an admin token.
 
 > Costs are **API list-price equivalents** (tokens × pay-as-you-go rates) —

@@ -12,8 +12,12 @@ Three destinations, chosen during setup:
 | **SharePoint List** | one-time Azure AD app registration by an admin | Microsoft 365 shops that want the data in SharePoint (Excel / Power BI on top) |
 
 For the sync server, developers enter just the server URL and an ingest token
-during `/cost-setup`; see [server/README.md](server/README.md) for running the
-server, creating dashboard users, and the API.
+during `/cost-setup` (or set `COST_OBS_SERVER_URL` / `COST_OBS_SERVER_TOKEN`
+env vars — ideal for VDI images). The admin logs into the **Cost Observatory**
+dashboard to generate ingest tokens, browse usage grouped by developer /
+project / model / day with sortable columns, and export to Excel / CSV / JSON.
+See [server/README.md](server/README.md) for running the server, the auth
+model, and the API.
 
 ---
 
@@ -22,27 +26,34 @@ server, creating dashboard users, and the API.
 ```
 Claude Code session (developer's machine)
   │
-  │  Stop hook — fires after every Claude response (local, fast)
-  │    └─ parses the session transcript → queues one row per turn
-  │       (local CSV mode: the row is appended immediately)
+  │  SessionStart hook — fires when a session starts
+  │    └─ flushes anything left on disk from a prior session that
+  │       crashed, lost power, or ran offline (outage recovery)
+  │
+  │  Stop hook — fires after every Claude response (fast)
+  │    └─ parses the transcript → writes one row per turn to the
+  │       on-disk queue (local CSV mode also appends immediately)
   │
   │  SessionEnd hook — fires when the session ends
-  │    └─ flushes any queued rows to the destination (network uploads
-  │       happen here so the per-turn hook stays fast)
+  │    └─ flushes queued rows to the destination (network uploads
+  │       happen here + at the next SessionStart, keeping the hook fast)
   ▼
-┌───────────────────────────────┐   ┌─────────────────────────────────────┐
-│ Local CSV (destination=local) │ or │ SharePoint List (destination=       │
-│ ~/.claude/cost-observability/ │   │ sharepoint) via Microsoft Graph      │
-│ usage.csv — path configurable │   │ "Claude Cost Tracking"               │
-└───────────────────────────────┘   └─────────────────────────────────────┘
+┌──────────────────┐   ┌──────────────────────┐   ┌────────────────────────┐
+│ Local CSV        │   │ Team sync server     │   │ SharePoint List        │
+│ (=local)         │   │ (=server) → Postgres │   │ (=sharepoint) via      │
+│ usage.csv        │   │ + Cost Observatory   │   │ Microsoft Graph        │
+│                  │   │   dashboard          │   │                        │
+└──────────────────┘   └──────────────────────┘   └────────────────────────┘
   one row per (turn, model):
-  user email · machine · project · session · input/output tokens · cache tokens · cost USD
+  row_id · timestamp · user email · machine · project · session ·
+  input/output tokens · cache tokens · cost USD
 ```
 
 1. **Recording** — Claude Code stores every session transcript locally as JSONL,
    including exact token usage per API call. After each response, the plugin's
    `Stop` hook parses that transcript, dedupes API calls by message/request ID,
-   and snapshots per-model totals. This step never touches the network.
+   and writes one row per turn to an on-disk queue. This step never touches the
+   network.
 2. **Pricing** — cost is estimated from a built-in pricing table (input, output,
    cache-read at 0.1×, cache-write at 1.25×/2× input price, per million tokens).
    Update `PRICING` in [`scripts/track_usage.py`](scripts/track_usage.py) when
@@ -57,23 +68,27 @@ Claude Code session (developer's machine)
    > conversation from cache on every turn, so cached-input tokens dominate).
    > Use the numbers for per-developer/project comparison and for answering
    > "what would this cost on API billing?" — not as an invoice.
-3. **Delivering** — when the session ends, the `SessionEnd` hook computes the
-   *delta* since the last upload and writes one row per model to the configured
-   destination: appended to the local CSV, or pushed to the SharePoint List
-   through the Microsoft Graph API (authenticated as the developer).
+3. **Delivering** — queued rows flush to the configured destination: appended to
+   the local CSV, POSTed to the team sync server, or pushed to the SharePoint
+   List via Microsoft Graph. Each row carries a unique `row_id`, so re-syncs and
+   retries only ever add **missing** rows — never duplicates.
 
 ### Reliability properties
 
 - **No dependencies** — the tracker is a single stdlib-only Python 3 script;
   developers install nothing beyond the plugin itself.
-- **Offline-safe** — if the upload fails (no network, expired sign-in), rows
-  queue locally and are flushed on the next session end or via `/cost-sync`.
-- **Crash-safe** — every turn is recorded the moment the response finishes, so
-  a killed session, crashed VDI, or lost connection loses at most the single
-  response that was in flight. SharePoint rows queued by a crashed session are
-  uploaded the next time any session ends (or via `/cost-sync`).
+- **Durable local buffer for every destination** — rows are written to the
+  on-disk queue (`~/.claude/cost-observability/queue/`) before any upload is
+  attempted, even in server/SharePoint mode. Nothing lives only in memory.
+- **Power-outage safe** — every turn is recorded the moment the response
+  finishes, so a killed session, crashed VDI, or yanked power loses at most the
+  single response in flight. On the **next session start** the queue is flushed
+  automatically; a row stranded mid-upload by a crash (a `.inflight` file) is
+  reclaimed and retried rather than lost.
+- **Idempotent uploads** — dedup on `row_id` means a lost network response,
+  or `SessionStart` and `SessionEnd` both flushing, can never double-count.
 - **Resume-safe** — resumed sessions report only usage accrued since the last
-  recorded turn, so nothing is double-counted.
+  recorded turn (delta tracking).
 - **Never breaks your session** — all hook errors are swallowed and logged to
   `~/.claude/cost-observability/log.txt`.
 
@@ -142,6 +157,13 @@ The guided setup first asks **where the data should go**:
    network-share folder to share usage with the team without any Azure setup.
 2. A test row is written to verify. Done.
 
+**Team sync server** (just a URL + token):
+1. Paste the **server link** and the **ingest token** the admin generated in the
+   dashboard's *Ingest Tokens* panel. Or skip the questions entirely by setting
+   `COST_OBS_SERVER_URL` and `COST_OBS_SERVER_TOKEN` in the environment (bake
+   them into a VDI image / shell profile for zero-touch onboarding).
+2. A test row is pushed to verify. Done.
+
 **SharePoint List** (asks for Azure details only on this path):
 1. Enter the **tenant ID** and **client ID** (from the admin) and the SharePoint
    **site URL**; your email defaults to `git config user.email`.
@@ -160,16 +182,37 @@ recording immediately after install.
 
 | Command | What it does |
 |---|---|
-| `/cost-setup` | Guided one-time setup: config, Microsoft sign-in, list creation |
-| `/cost-report` | Local usage summary (by model / project / day) for this machine |
-| `/cost-sync` | Health check + push queued rows to SharePoint now |
+| `/cost-setup` | Guided one-time setup: pick a destination and configure it |
+| `/cost-report` | Local usage summary (by model / project / day, plus recent turns) for this machine |
+| `/cost-sync` | Health check + flush any queued rows to the destination now |
 
 The underlying script also supports `login`, `test`, `flush`, `status`,
-`report --days N`, `create-list`, `resolve`:
+`report --days N --turns N`, `create-list`, `resolve`:
 
 ```
 python3 scripts/track_usage.py --help
 ```
+
+---
+
+## The team sync server
+
+The bundled [`server/`](server/README.md) app (FastAPI) receives usage from the
+plugins into PostgreSQL (or SQLite locally) and serves the **Cost Observatory**
+dashboard — login-protected, with:
+
+- Totals (API-equivalent cost, tokens, sessions, developer count) over a
+  selectable 7 / 30 / 90-day window.
+- **Group by** Developer / Project / Model / Day, each a sortable table.
+- A **Recent Turns** table sortable by any column (time, developer, project,
+  model, tokens, cost), sorted server-side across the full dataset.
+- One-click export to **Excel / CSV / JSON**.
+- An **Ingest Tokens** panel to generate (and revoke) the tokens developers use.
+
+Auth is a single admin (username + password from the `COST_OBS_ADMIN_PASSWORD`
+env var); everyone else is a data sender holding an ingest token that can only
+write, never read. A live instance is deployed on Railway:
+https://claude-cost-observability-production.up.railway.app
 
 ---
 
@@ -199,7 +242,13 @@ per project, per model, per day.
 .claude-plugin/
   plugin.json          plugin manifest
   marketplace.json     lets the repo act as a plugin marketplace
-hooks/hooks.json       Stop + SessionEnd hook wiring
+hooks/hooks.json       SessionStart + Stop + SessionEnd hook wiring
 scripts/track_usage.py the tracker (stdlib-only Python 3)
 commands/              /cost-setup, /cost-report, /cost-sync
+server/                team sync server + Cost Observatory dashboard
+  app.py               FastAPI: ingest, analytics, export, token mgmt
+  db.py                dual-backend storage (Postgres via DATABASE_URL, else SQLite)
+  manage.py            admin CLI (init db, generate ingest tokens)
+  static/              the dashboard (login, charts, grouping, export)
+  README.md            run locally, deploy on Railway, auth model, API
 ```
