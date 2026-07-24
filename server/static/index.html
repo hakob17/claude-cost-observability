@@ -106,6 +106,29 @@
     </div>
   </section>
 
+  <section class="panel">
+    <h2 class="panel-title">── INGEST TOKENS ── share with data senders ──</h2>
+    <div class="token-new">
+      <input id="token-name" type="text" placeholder="token name — e.g. vdi-fleet, alice-laptop" spellcheck="false">
+      <button id="token-gen">+ GENERATE</button>
+    </div>
+    <div id="token-result" class="token-result" hidden>
+      <p class="token-warn">SHARE THIS TOKEN NOW — IT IS SHOWN ONLY ONCE</p>
+      <div class="token-line">
+        <code id="token-value"></code>
+        <button id="token-copy">COPY</button>
+      </div>
+      <p class="token-hint">Data senders paste it during <b>/cost-setup</b>, or set
+        <code>COST_OBS_SERVER_TOKEN</code> (+ <code>COST_OBS_SERVER_URL</code>) in their environment.</p>
+    </div>
+    <div class="tablewrap">
+      <table id="tokens-table">
+        <thead><tr><th>NAME</th><th>ROLE</th><th>PREFIX</th><th>CREATED</th><th class="r"></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
   <footer class="dash-foot">
     cost-observability &middot; figures are API list-price equivalents, not invoices
   </footer>

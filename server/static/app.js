@@ -113,6 +113,51 @@
     $("#ticker").textContent = "── " + parts.join(" ── ") + " ──";
   }
 
+  // ------------------------------------------------------------- tokens
+
+  async function loadTokens() {
+    const data = await api("/api/tokens");
+    const tb = $("#tokens-table tbody");
+    tb.innerHTML = "";
+    data.tokens.forEach((t) => {
+      const tr = document.createElement("tr");
+      const created = new Date(t.created_at * 1000).toISOString().slice(0, 10);
+      tr.innerHTML =
+        `<td>${t.name}</td><td><span class="model">${t.role}</span></td>` +
+        `<td><span class="model">${t.prefix}…</span></td><td>${created}</td>` +
+        `<td class="r"><button class="token-revoke" data-prefix="${t.prefix}">REVOKE</button></td>`;
+      tb.appendChild(tr);
+    });
+  }
+
+  $("#token-gen").addEventListener("click", async () => {
+    const name = $("#token-name").value.trim();
+    if (!name) { $("#token-name").focus(); return; }
+    const data = await api("/api/tokens", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    $("#token-value").textContent = data.token;
+    $("#token-result").hidden = false;
+    $("#token-name").value = "";
+    loadTokens();
+  });
+
+  $("#token-copy").addEventListener("click", async () => {
+    await navigator.clipboard.writeText($("#token-value").textContent);
+    $("#token-copy").textContent = "COPIED ✓";
+    setTimeout(() => ($("#token-copy").textContent = "COPY"), 1500);
+  });
+
+  $("#tokens-table").addEventListener("click", async (e) => {
+    const btn = e.target.closest(".token-revoke");
+    if (!btn) return;
+    if (!confirm(`Revoke token ${btn.dataset.prefix}…? Plugins using it will stop syncing.`)) return;
+    await api(`/api/tokens/${btn.dataset.prefix}`, { method: "DELETE" });
+    loadTokens();
+  });
+
   // ------------------------------------------------------------- data
 
   async function refresh() {
@@ -127,6 +172,7 @@
     renderBars("#chart-project", stats.by_project, (r) => r.key || "?");
     renderTable(rows.rows);
     renderTicker(stats);
+    loadTokens().catch(() => {});
   }
 
   // ------------------------------------------------------------- events

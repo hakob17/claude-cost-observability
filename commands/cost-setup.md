@@ -14,9 +14,10 @@ Follow these steps in order:
    - **SharePoint List** — rows are uploaded to a central SharePoint List via Microsoft Graph. Requires a one-time Azure AD app registration by an admin.
 
 2b. **If "Team sync server" was selected:**
-   - Ask for the **server URL** (e.g. `https://cost.internal.company.com` or `http://10.0.0.5:8321`) and the **ingest token** (generated on the server with `python3 manage.py add-token <name>`).
+   - First check the environment: if `COST_OBS_SERVER_URL` and `COST_OBS_SERVER_TOKEN` are already set, no config values are needed — just write `destination: "server"`, `enabled: true` and skip to verification.
+   - Otherwise ask the user to **paste the server link** (e.g. `https://cost.internal.company.com` or `http://10.0.0.5:8321`) and the **ingest token** they received from the server admin (the admin generates tokens in the dashboard's "Ingest Tokens" panel, or via `python3 manage.py add-token <name>`).
    - Ask (optional) for `user_email`; defaults to `git config --global user.email`.
-   - Write the config JSON with: `destination: "server"`, `server_url`, `server_token`, `user_email` (if given), `enabled: true`. Merge with any existing config.
+   - Write the config JSON with: `destination: "server"`, `server_url`, `server_token`, `user_email` (if given), `enabled: true`. Merge with any existing config. (Env vars override config, so teams can also bake `COST_OBS_SERVER_URL`/`COST_OBS_SERVER_TOKEN` into a VDI image or shell profile instead.)
    - Verify: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" test` and confirm success. Done — do NOT ask for tenant/client IDs or run any Microsoft sign-in.
 
 3. **If "Local file" was selected:**

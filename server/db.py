@@ -1,6 +1,5 @@
 """SQLite storage for the cost-observability sync server."""
 
-import hashlib
 import os
 import secrets
 import sqlite3
@@ -30,13 +29,6 @@ CREATE TABLE IF NOT EXISTS usage_rows (
 CREATE INDEX IF NOT EXISTS idx_rows_ts ON usage_rows (ts);
 CREATE INDEX IF NOT EXISTS idx_rows_user ON usage_rows (user_email);
 
-CREATE TABLE IF NOT EXISTS users (
-    username TEXT PRIMARY KEY,
-    pw_salt TEXT NOT NULL,
-    pw_hash TEXT NOT NULL,
-    created_at REAL NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     username TEXT NOT NULL,
@@ -65,26 +57,20 @@ def init_db():
 
 
 # ------------------------------------------------------------------ auth
+#
+# Single-admin model: the only dashboard user is the admin, configured via
+# environment variables. Everyone else is a data sender with an ingest token.
 
-def _hash_pw(password, salt):
-    return hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 200_000).hex()
-
-
-def add_user(username, password):
-    salt = secrets.token_hex(16)
-    with connect() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO users (username, pw_salt, pw_hash, created_at) VALUES (?,?,?,?)",
-            (username, salt, _hash_pw(password, salt), time.time()),
-        )
+def admin_username():
+    return os.environ.get("COST_OBS_ADMIN_USER", "admin")
 
 
-def verify_user(username, password):
-    with connect() as conn:
-        row = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
-    if not row:
-        return False
-    return secrets.compare_digest(row["pw_hash"], _hash_pw(password, row["pw_salt"]))
+def verify_admin(username, password):
+    expected = os.environ.get("COST_OBS_ADMIN_PASSWORD")
+    if not expected:
+        return False  # login disabled until the env var is set
+    return secrets.compare_digest(username, admin_username()) and \
+        secrets.compare_digest(password, expected)
 
 
 def create_session(username, ttl_days=7):
@@ -130,6 +116,21 @@ def token_role(token):
     with connect() as conn:
         row = conn.execute("SELECT role FROM api_tokens WHERE token=?", (token,)).fetchone()
     return row["role"] if row else None
+
+
+def list_tokens():
+    with connect() as conn:
+        return [
+            {"name": r["name"], "role": r["role"],
+             "prefix": r["token"][:12], "created_at": r["created_at"]}
+            for r in conn.execute("SELECT * FROM api_tokens ORDER BY created_at DESC")
+        ]
+
+
+def delete_token(prefix):
+    with connect() as conn:
+        cur = conn.execute("DELETE FROM api_tokens WHERE substr(token, 1, 12) = ?", (prefix,))
+    return cur.rowcount
 
 
 # ------------------------------------------------------------------ rows

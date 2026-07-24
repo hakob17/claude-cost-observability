@@ -242,3 +242,39 @@ td .model { color: var(--dim); }
 td .cost { color: var(--phos); }
 
 .dash-foot { color: var(--faint); font-size: 10px; letter-spacing: 0.16em; margin-top: 8px; }
+
+/* Tokens panel */
+
+.token-new { display: flex; gap: 10px; margin-bottom: 16px; }
+.token-new input {
+  flex: 1; max-width: 420px; background: var(--bg); border: 1px solid var(--line-strong);
+  color: var(--ink); font: 400 12px var(--mono); padding: 9px 12px; outline: none;
+}
+.token-new input:focus { border-color: var(--phos); box-shadow: 0 0 0 1px var(--phos); }
+.token-new button {
+  background: var(--phos); color: #06110a; border: none; cursor: pointer;
+  font: 600 11px var(--mono); letter-spacing: 0.12em; padding: 9px 16px;
+}
+.token-new button:hover { box-shadow: 0 0 20px rgba(124, 227, 139, 0.45); }
+
+.token-result {
+  border: 1px dashed var(--amber); background: rgba(232, 176, 92, 0.05);
+  padding: 14px 16px; margin-bottom: 18px;
+}
+.token-warn { color: var(--amber); font-size: 10px; letter-spacing: 0.2em; margin-bottom: 10px; }
+.token-line { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.token-line code {
+  color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+  padding: 8px 10px; font-size: 12px; word-break: break-all; flex: 1; min-width: 200px;
+}
+.token-line button {
+  background: var(--amber); color: #140d02; border: none; cursor: pointer;
+  font: 600 11px var(--mono); letter-spacing: 0.12em; padding: 9px 14px;
+}
+.token-hint { color: var(--dim); font-size: 10.5px; margin-top: 10px; }
+.token-hint code { color: var(--amber); }
+.token-revoke {
+  background: transparent; border: 1px solid var(--line); color: var(--dim);
+  font: 600 9px var(--mono); letter-spacing: 0.12em; padding: 4px 9px; cursor: pointer;
+}
+.token-revoke:hover { color: var(--red); border-color: var(--red); }

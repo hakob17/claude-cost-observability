@@ -9,6 +9,7 @@ Run:  uvicorn app:app --host 0.0.0.0 --port 8321   (from the server/ directory)
 import csv
 import io
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,6 +21,8 @@ import db
 
 app = FastAPI(title="Cost Observability", docs_url=None, redoc_url=None)
 db.init_db()
+if not os.environ.get("COST_OBS_ADMIN_PASSWORD"):
+    print("[cost-obs] WARNING: COST_OBS_ADMIN_PASSWORD is not set — dashboard login is disabled")
 
 STATIC_DIR = Path(__file__).parent / "static"
 SESSION_COOKIE = "cost_obs_session"
@@ -32,8 +35,8 @@ def bearer_token(request: Request):
     return auth[7:].strip() if auth.lower().startswith("bearer ") else None
 
 
-def require_viewer(request: Request):
-    """UI/analytics access: a logged-in session cookie or an admin API token."""
+def require_admin(request: Request):
+    """Dashboard/analytics/token access: the admin session or an admin API token."""
     user = db.session_user(request.cookies.get(SESSION_COOKIE))
     if user:
         return user
@@ -57,7 +60,7 @@ async def login(request: Request, response: Response):
     body = await request.json()
     username = (body.get("username") or "").strip()
     password = body.get("password") or ""
-    if not db.verify_user(username, password):
+    if not db.verify_admin(username, password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     token = db.create_session(username)
     response.set_cookie(
@@ -75,8 +78,32 @@ def logout(request: Request, response: Response):
 
 
 @app.get("/api/me")
-def me(user: str = Depends(require_viewer)):
+def me(user: str = Depends(require_admin)):
     return {"user": user}
+
+
+# ------------------------------------------------------------------ tokens
+
+@app.get("/api/tokens")
+def tokens_list(_: str = Depends(require_admin)):
+    return {"tokens": db.list_tokens()}
+
+
+@app.post("/api/tokens")
+async def tokens_create(request: Request, _: str = Depends(require_admin)):
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    token = db.create_api_token(name, role="ingest")
+    return {"ok": True, "name": name, "token": token}
+
+
+@app.delete("/api/tokens/{prefix}")
+def tokens_delete(prefix: str, _: str = Depends(require_admin)):
+    if db.delete_token(prefix) == 0:
+        raise HTTPException(status_code=404, detail="token not found")
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------ ingest
@@ -111,13 +138,13 @@ async def ingest(request: Request, _: str = Depends(require_ingest)):
 # ------------------------------------------------------------------ analytics
 
 @app.get("/api/stats")
-def api_stats(days: int = 30, _: str = Depends(require_viewer)):
+def api_stats(days: int = 30, _: str = Depends(require_admin)):
     return db.stats(days=days)
 
 
 @app.get("/api/rows")
 def api_rows(days: int = 30, user: str = None, project: str = None,
-             limit: int = 200, _: str = Depends(require_viewer)):
+             limit: int = 200, _: str = Depends(require_admin)):
     return {"rows": db.query_rows(days=days, user=user, project=project, limit=limit)}
 
 
@@ -132,7 +159,7 @@ EXPORT_COLUMNS = [
 
 @app.get("/api/export")
 def export(format: str = "csv", days: int = 30, user: str = None,
-           project: str = None, _: str = Depends(require_viewer)):
+           project: str = None, _: str = Depends(require_admin)):
     rows = db.query_rows(days=days, user=user, project=project)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
     name = f"claude-usage-{stamp}"

@@ -118,9 +118,21 @@ def destination(cfg):
         return cfg["destination"]
     if cfg.get("list_id"):
         return "sharepoint"
-    if cfg.get("server_url"):
+    if cfg.get("server_url") or os.environ.get("COST_OBS_SERVER_URL"):
         return "server"
     return "local"
+
+
+def server_settings(cfg):
+    """Server URL + ingest token, from environment variables or config.
+
+    Env vars win, so a token distributed via the environment (e.g. a VDI
+    image or shell profile) works with zero per-user config:
+        COST_OBS_SERVER_URL, COST_OBS_SERVER_TOKEN
+    """
+    url = os.environ.get("COST_OBS_SERVER_URL") or cfg.get("server_url")
+    token = os.environ.get("COST_OBS_SERVER_TOKEN") or cfg.get("server_token")
+    return url, token
 
 
 def local_file(cfg):
@@ -466,10 +478,11 @@ def append_local(cfg, row):
 
 def push_row_server(cfg, row):
     """POST one row to the team sync server; returns error dict or None."""
+    url, token = server_settings(cfg)
     _, err = http_json(
-        cfg["server_url"].rstrip("/") + "/api/ingest",
+        url.rstrip("/") + "/api/ingest",
         {"rows": [row]},
-        headers={"Authorization": f"Bearer {cfg['server_token']}"},
+        headers={"Authorization": f"Bearer {token}"},
     )
     return err
 
@@ -489,10 +502,12 @@ def flush_queue(verbose=False):
     dest = destination(cfg)
     token = None
     if dest == "server":
-        if not cfg.get("server_url") or not cfg.get("server_token"):
+        url, tok = server_settings(cfg)
+        if not url or not tok:
             log("flush skipped: server config incomplete")
             if verbose:
-                print("Server config incomplete — run /cost-setup.")
+                print("Server config incomplete — run /cost-setup or set "
+                      "COST_OBS_SERVER_URL / COST_OBS_SERVER_TOKEN.")
             return 0
     elif dest == "sharepoint":
         if not all(cfg.get(k) for k in ("tenant_id", "client_id", "site_id", "list_id")):
@@ -624,13 +639,15 @@ def cmd_test(_args):
         print(f"Test row written to {local_file(cfg)}")
         return 0
     if destination(cfg) == "server":
-        if not cfg.get("server_url") or not cfg.get("server_token"):
-            raise SystemExit("Server config incomplete — set server_url and server_token.")
+        url, tok = server_settings(cfg)
+        if not url or not tok:
+            raise SystemExit("Server config incomplete — set server_url/server_token "
+                             "in config or COST_OBS_SERVER_URL/COST_OBS_SERVER_TOKEN in env.")
         row["row_id"] = uuid.uuid4().hex
         err = push_row_server(cfg, row)
         if err:
             raise SystemExit(f"Test push FAILED: {err}")
-        print(f"Test row pushed to {cfg['server_url']} — check the dashboard.")
+        print(f"Test row pushed to {url} — check the dashboard.")
         return 0
     token = get_token()
     if not token:
@@ -785,8 +802,11 @@ def cmd_status(_args):
         p = local_file(cfg)
         print(f"  local_file  : {p} ({'exists' if p.exists() else 'will be created'})")
     elif dest == "server":
-        print(f"  server_url  : {cfg.get('server_url') or 'NOT SET'}")
-        print(f"  server_token: {'set' if cfg.get('server_token') else 'NOT SET'}")
+        url, tok = server_settings(cfg)
+        src_u = " (from env)" if os.environ.get("COST_OBS_SERVER_URL") else ""
+        src_t = " (from env)" if os.environ.get("COST_OBS_SERVER_TOKEN") else ""
+        print(f"  server_url  : {(url or 'NOT SET') + src_u}")
+        print(f"  server_token: {('set' + src_t) if tok else 'NOT SET'}")
     else:
         for k in ("tenant_id", "client_id", "site_id", "list_id"):
             print(f"  {k:<12}: {'set' if cfg.get(k) else 'NOT SET'}")
