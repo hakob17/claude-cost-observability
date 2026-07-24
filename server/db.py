@@ -217,7 +217,20 @@ def insert_rows(rows, received_at):
     return inserted
 
 
-def query_rows(days=30, user=None, project=None, limit=None):
+# Whitelist of sortable columns for the rows table (key -> SQL expression).
+ROW_SORT = {
+    "ts": "ts",
+    "user": "user_email",
+    "project": "project",
+    "model": "model",
+    "cost": "cost_usd",
+    "in": "(input_tokens + cache_read_tokens + cache_write_tokens)",
+    "out": "output_tokens",
+    "turns": "turns",
+}
+
+
+def query_rows(days=30, user=None, project=None, limit=None, order_by="ts", order="desc"):
     q = "SELECT * FROM usage_rows WHERE ts >= ?"
     params = [_cutoff(days)]
     if user:
@@ -226,7 +239,9 @@ def query_rows(days=30, user=None, project=None, limit=None):
     if project:
         q += " AND project = ?"
         params.append(project)
-    q += " ORDER BY ts DESC"
+    col = ROW_SORT.get(order_by, "ts")
+    direction = "ASC" if str(order).lower() == "asc" else "DESC"
+    q += f" ORDER BY {col} {direction} NULLS LAST" if PG else f" ORDER BY {col} {direction}"
     if limit:
         q += f" LIMIT {int(limit)}"
     return _read(q, params)

@@ -487,12 +487,38 @@ def push_row_server(cfg, row):
     return err
 
 
+def reclaim_inflight(max_age_sec=120):
+    """Recover rows orphaned as *.inflight by a crash/power-loss mid-upload.
+
+    A normal upload renames the file to .inflight, uploads, then deletes it.
+    If power is cut in that window the .inflight file is stranded and would
+    never be retried (flush only scans *.json). Rename stale ones back so the
+    next flush picks them up. The age gate avoids stealing a file a concurrent
+    flusher is actively uploading.
+    """
+    if not QUEUE_DIR.is_dir():
+        return 0
+    reclaimed = 0
+    for p in QUEUE_DIR.glob("*.inflight"):
+        try:
+            if time.time() - p.stat().st_mtime < max_age_sec:
+                continue
+            os.rename(p, p.with_suffix(".json"))
+            reclaimed += 1
+        except OSError:
+            continue
+    if reclaimed:
+        log(f"reclaimed {reclaimed} stranded in-flight row(s) after a crash/outage")
+    return reclaimed
+
+
 def flush_queue(verbose=False):
     cfg = load_config()
     if not cfg.get("enabled", True):
         return 0
     if not QUEUE_DIR.is_dir():
         return 0
+    reclaim_inflight()
     files = sorted(QUEUE_DIR.glob("*.json"))
     if not files:
         if verbose:
@@ -668,20 +694,35 @@ def handle_hook():
         return 0
     event = payload.get("hook_event_name", "")
     session_id = payload.get("session_id")
-    tp = payload.get("transcript_path")
-    if not session_id or not tp or not os.path.exists(tp):
-        return 0
+
     try:
+        cfg = load_config()
+
+        # SessionStart: sync anything left on disk from a prior session that
+        # crashed, lost power, or ran offline — before the new session's
+        # transcript even exists. This is the outage-recovery path.
+        if event == "SessionStart":
+            sweep_stale(cfg)              # enqueue deltas from abandoned sessions
+            flush_queue()                 # reclaims stranded .inflight + retries queue
+            return 0
+
+        # Stop / SessionEnd need the transcript.
+        tp = payload.get("transcript_path")
+        if not session_id or not tp or not os.path.exists(tp):
+            return 0
+
         totals = parse_transcript(tp)
         snapshot(session_id, payload, totals)
-        cfg = load_config()
-        # Enqueue on every turn (Stop), not just SessionEnd: a crashed
-        # machine/VDI then loses at most the response that was in flight.
+        # Enqueue on every turn (Stop), not just SessionEnd: rows land on disk
+        # immediately, so a crashed machine/VDI loses at most the response
+        # that was in flight. The queue is the durable buffer for ALL
+        # destinations — even server/SharePoint mode persists locally first.
         enqueue_session(session_id, cfg)
         if event == "SessionEnd":
             sweep_stale(cfg)
         # Local CSV appends are instant — flush every turn. Network uploads
-        # (SharePoint) wait for SessionEnd to keep the Stop hook fast.
+        # (server / SharePoint) flush at SessionEnd (and at the next
+        # SessionStart) to keep the per-turn hook fast.
         if destination(cfg) == "local" or event == "SessionEnd":
             if QUEUE_DIR.is_dir() and any(QUEUE_DIR.glob("*.json")):
                 flush_queue()

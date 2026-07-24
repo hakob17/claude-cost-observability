@@ -1,7 +1,15 @@
 /* Cost Observatory — dashboard logic (no dependencies) */
 (() => {
   const $ = (sel) => document.querySelector(sel);
-  const state = { days: 30, user: null };
+  const state = {
+    days: 30,
+    user: null,
+    group: "user",
+    groupSort: { col: "cost", dir: "desc" },
+    rowsSort: { col: "ts", dir: "desc" },
+    stats: null,
+  };
+  const GROUP_KEY = { user: "by_user", project: "by_project", model: "by_model", day: "by_day" };
 
   const fmtUSD = (v) => "$" + (v || 0).toLocaleString("en-US", { maximumFractionDigits: 2 });
   const fmtNum = (v) => {
@@ -63,31 +71,56 @@
     });
   }
 
-  function renderBars(sel, items, labelFn) {
-    const el = $(sel);
-    el.innerHTML = "";
-    const top = items.slice(0, 8);
-    const max = Math.max(...top.map((r) => r.cost || 0), 0.0001);
-    if (!top.length) {
-      el.innerHTML = '<p class="daychart-empty">── NO DATA ──</p>';
-      return;
+  function renderGroup() {
+    if (!state.stats) return;
+    const items = (state.stats[GROUP_KEY[state.group]] || []).slice();
+    const { col, dir } = state.groupSort;
+    const day = state.group === "day";
+    items.sort((a, b) => {
+      let av = col === "key" ? (a.key || "") : (a[col] || 0);
+      let bv = col === "key" ? (b.key || "") : (b[col] || 0);
+      const cmp = typeof av === "string" ? av.localeCompare(bv) : av - bv;
+      return dir === "asc" ? cmp : -cmp;
+    });
+    const max = Math.max(...items.map((r) => r.cost || 0), 0.0001);
+    const tb = $("#group-table tbody");
+    tb.innerHTML = "";
+    if (!items.length) {
+      tb.innerHTML = '<tr><td colspan="5" style="color:var(--faint)">── NO DATA IN RANGE ──</td></tr>';
     }
-    top.forEach((r, i) => {
-      const row = document.createElement("div");
-      row.className = "brow";
+    items.forEach((r, i) => {
+      const tr = document.createElement("tr");
       const pct = Math.max(1.5, ((r.cost || 0) / max) * 100);
-      row.innerHTML =
-        `<span class="bl" title="${labelFn(r)}">${labelFn(r)}</span>` +
-        `<span class="bv">${fmtUSD(r.cost)}</span>` +
-        `<span class="bt"><i style="width:${pct}%;animation-delay:${i * 45}ms"></i></span>`;
-      el.appendChild(row);
+      tr.innerHTML =
+        `<td class="gname" title="${r.key || "?"}">${r.key || "?"}</td>` +
+        `<td class="r"><span class="cost">${fmtUSD(r.cost)}</span>` +
+        `<span class="minibar" style="width:${pct}%;animation-delay:${i * 25}ms"></span></td>` +
+        `<td class="r">${day ? "—" : fmtNum(r.tokens_in)}</td>` +
+        `<td class="r">${day ? "—" : fmtNum(r.tokens_out)}</td>` +
+        `<td class="r">${day ? "—" : fmtNum(r.sessions)}</td>`;
+      tb.appendChild(tr);
+    });
+    // reflect active sort on headers
+    document.querySelectorAll("#group-table th").forEach((th) => {
+      th.classList.toggle("on", th.dataset.sort === col);
+      th.classList.toggle("asc", th.dataset.sort === col && dir === "asc");
+      th.classList.toggle("desc", th.dataset.sort === col && dir === "desc");
     });
   }
 
   function renderTable(rows) {
     const tb = $("#rows-table tbody");
     tb.innerHTML = "";
-    rows.slice(0, 40).forEach((r) => {
+    document.querySelectorAll("#rows-table th").forEach((th) => {
+      const on = th.dataset.sort === state.rowsSort.col;
+      th.classList.toggle("on", on);
+      th.classList.toggle("asc", on && state.rowsSort.dir === "asc");
+      th.classList.toggle("desc", on && state.rowsSort.dir === "desc");
+    });
+    if (!rows.length) {
+      tb.innerHTML = '<tr><td colspan="7" style="color:var(--faint)">── NO TURNS IN RANGE ──</td></tr>';
+    }
+    rows.slice(0, 60).forEach((r) => {
       const tr = document.createElement("tr");
       const tin = (r.input_tokens || 0) + (r.cache_read_tokens || 0) + (r.cache_write_tokens || 0);
       tr.innerHTML =
@@ -160,18 +193,20 @@
 
   // ------------------------------------------------------------- data
 
+  async function loadRows() {
+    const { col, dir } = state.rowsSort;
+    const rows = await api(`/api/rows?days=${state.days}&limit=60&order_by=${col}&order=${dir}`);
+    renderTable(rows.rows);
+  }
+
   async function refresh() {
-    const [stats, rows] = await Promise.all([
-      api(`/api/stats?days=${state.days}`),
-      api(`/api/rows?days=${state.days}&limit=40`),
-    ]);
+    const stats = await api(`/api/stats?days=${state.days}`);
+    state.stats = stats;
     renderTiles(stats.totals);
     renderDays(stats.by_day);
-    renderBars("#chart-model", stats.by_model, (r) => r.key || "?");
-    renderBars("#chart-user", stats.by_user, (r) => r.key || "?");
-    renderBars("#chart-project", stats.by_project, (r) => r.key || "?");
-    renderTable(rows.rows);
+    renderGroup();
     renderTicker(stats);
+    await loadRows();
     loadTokens().catch(() => {});
   }
 
@@ -208,6 +243,36 @@
     state.days = Number(btn.dataset.days);
     document.querySelectorAll("#days-seg button").forEach((b) => b.classList.toggle("on", b === btn));
     refresh().catch(() => {});
+  });
+
+  $("#group-seg").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-group]");
+    if (!btn) return;
+    state.group = btn.dataset.group;
+    document.querySelectorAll("#group-seg button").forEach((b) => b.classList.toggle("on", b === btn));
+    // day has no per-key tokens/sessions; default its sort to the day name
+    if (state.group === "day") state.groupSort = { col: "key", dir: "asc" };
+    renderGroup();
+  });
+
+  $("#group-table thead").addEventListener("click", (e) => {
+    const th = e.target.closest("th[data-sort]");
+    if (!th) return;
+    const col = th.dataset.sort;
+    state.groupSort = state.groupSort.col === col
+      ? { col, dir: state.groupSort.dir === "asc" ? "desc" : "asc" }
+      : { col, dir: col === "key" ? "asc" : "desc" };
+    renderGroup();
+  });
+
+  $("#rows-table thead").addEventListener("click", (e) => {
+    const th = e.target.closest("th[data-sort]");
+    if (!th) return;
+    const col = th.dataset.sort;
+    state.rowsSort = state.rowsSort.col === col
+      ? { col, dir: state.rowsSort.dir === "asc" ? "desc" : "asc" }
+      : { col, dir: col === "ts" || col === "cost" || col === "in" || col === "out" ? "desc" : "asc" };
+    loadRows().catch(() => {});
   });
 
   $("#logout").addEventListener("click", async () => {

@@ -144,8 +144,10 @@ def api_stats(days: int = 30, _: str = Depends(require_admin)):
 
 @app.get("/api/rows")
 def api_rows(days: int = 30, user: str = None, project: str = None,
-             limit: int = 200, _: str = Depends(require_admin)):
-    return {"rows": db.query_rows(days=days, user=user, project=project, limit=limit)}
+             limit: int = 200, order_by: str = "ts", order: str = "desc",
+             _: str = Depends(require_admin)):
+    return {"rows": db.query_rows(days=days, user=user, project=project,
+                                  limit=limit, order_by=order_by, order=order)}
 
 
 # ------------------------------------------------------------------ export

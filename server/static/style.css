@@ -243,6 +243,25 @@ td .cost { color: var(--phos); }
 
 .dash-foot { color: var(--faint); font-size: 10px; letter-spacing: 0.16em; margin-top: 8px; }
 
+/* Sortable tables */
+
+table.sortable th[data-sort] { cursor: pointer; user-select: none; transition: color 0.12s; }
+table.sortable th[data-sort]:hover { color: var(--phos); }
+table.sortable th[data-sort]::after { content: " ⇅"; opacity: 0.3; font-size: 9px; }
+table.sortable th.on { color: var(--phos); }
+table.sortable th.on.asc::after { content: " ↑"; opacity: 1; }
+table.sortable th.on.desc::after { content: " ↓"; opacity: 1; }
+
+/* Group breakdown table */
+
+#group-table .gname { color: var(--ink); max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+#group-table td.r { position: relative; }
+#group-table .minibar {
+  position: absolute; left: 0; bottom: 0; height: 2px; background: var(--phos);
+  box-shadow: 0 0 8px var(--phos-dim); animation: growx 0.5s cubic-bezier(0.2,0.7,0.2,1) both;
+  transform-origin: left; pointer-events: none;
+}
+
 /* Tokens panel */
 
 .token-new { display: flex; gap: 10px; margin-bottom: 16px; }
