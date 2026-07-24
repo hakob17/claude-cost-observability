@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py\" hook",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py\" hook || python \"${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py\" hook",
             "timeout": 120
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py\" hook",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py\" hook || python \"${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py\" hook",
             "timeout": 30
           }
         ]
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py\" hook",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py\" hook || python \"${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py\" hook",
             "timeout": 120
           }
         ]

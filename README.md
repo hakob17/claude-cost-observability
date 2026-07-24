@@ -91,6 +91,9 @@ Claude Code session (developer's machine)
   recorded turn (delta tracking).
 - **Never breaks your session** — all hook errors are swallowed and logged to
   `~/.claude/cost-observability/log.txt`.
+- **Cross-platform** — pure-stdlib Python (no shell scripts), and the hooks
+  invoke `python3` with a `python` fallback so they run on Windows (python.org
+  or Microsoft Store), macOS, and Linux alike.
 
 ### Data & privacy
 
@@ -141,7 +144,12 @@ Or auto-install for everyone working in a repo by committing this to that repo's
 }
 ```
 
-> Requires Python 3 on the machine (preinstalled on macOS/Linux).
+> **Requirements:** Python 3.8+ on PATH. Preinstalled on macOS/Linux. On
+> **Windows**, install from [python.org](https://python.org) (tick *"Add
+> python.exe to PATH"*) or the Microsoft Store — the hooks invoke
+> `python3` and fall back to `python`, so either the python.org (`python`,
+> `py`) or Store (`python`, `python3`) layout works. Native Windows, the
+> desktop app, and WSL are all supported; no WSL required.
 
 ### 2. Run setup (each developer, once)
 
