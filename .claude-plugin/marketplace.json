@@ -1,0 +1,13 @@
+{
+  "name": "cost-observability-marketplace",
+  "owner": {
+    "name": "Hakob Hakobyan"
+  },
+  "plugins": [
+    {
+      "name": "cost-observability",
+      "source": "./",
+      "description": "Tracks Claude Code LLM usage cost per developer and aggregates it into a central SharePoint List."
+    }
+  ]
+}

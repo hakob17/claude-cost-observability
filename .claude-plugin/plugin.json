@@ -1,0 +1,8 @@
+{
+  "name": "cost-observability",
+  "version": "0.1.0",
+  "description": "Tracks Claude Code LLM token usage and cost per developer session and pushes it to a central SharePoint List via Microsoft Graph.",
+  "author": {
+    "name": "Hakob Hakobyan"
+  }
+}
