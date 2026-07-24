@@ -2,7 +2,8 @@
 """Claude Code cost observability.
 
 Parses Claude Code session transcripts, computes token usage and estimated USD
-cost per model, and pushes one row per (session, model) to a central SharePoint
+cost per model, and writes one row per (session, model) to the configured
+destination: a local CSV file (default; zero setup) or a central SharePoint
 List via Microsoft Graph. Stdlib only — nothing to pip-install.
 
 Invoked automatically by Claude Code hooks (Stop / SessionEnd) with the hook
@@ -20,6 +21,7 @@ payload on stdin, or manually:
 """
 
 import argparse
+import csv
 import json
 import os
 import socket
@@ -101,6 +103,19 @@ def save_json(path, data, private=False):
 
 def load_config():
     return load_json(CONFIG_PATH, {})
+
+
+def destination(cfg):
+    """'local' (CSV file, no auth) or 'sharepoint' (Graph upload).
+
+    Defaults to 'sharepoint' when a list is already configured (back-compat),
+    otherwise 'local' — so the plugin is useful with zero setup.
+    """
+    return cfg.get("destination") or ("sharepoint" if cfg.get("list_id") else "local")
+
+
+def local_file(cfg):
+    return Path(os.path.expanduser(cfg.get("local_file") or str(BASE_DIR / "usage.csv")))
 
 
 def user_identity(cfg):
@@ -416,26 +431,56 @@ def push_row(cfg, token, row):
     return err
 
 
+CSV_FIELDS = [
+    "timestamp", "session_id", "user_email", "host", "project", "model",
+    "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+    "turns", "cost_usd",
+]
+
+
+def append_local(cfg, row):
+    """Append one row to the local CSV file; returns error dict or None."""
+    path = local_file(cfg)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_header = not path.exists() or path.stat().st_size == 0
+        with open(path, "a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
+            if write_header:
+                w.writeheader()
+            w.writerow(row)
+        return None
+    except OSError as e:
+        return {"error": {"code": "local_write", "message": str(e)}}
+
+
 def flush_queue(verbose=False):
     cfg = load_config()
     if not cfg.get("enabled", True):
-        return 0
-    if not all(cfg.get(k) for k in ("tenant_id", "client_id", "site_id", "list_id")):
-        log("flush skipped: config incomplete")
-        if verbose:
-            print("Config incomplete — run /cost-setup.")
         return 0
     if not QUEUE_DIR.is_dir():
         return 0
     files = sorted(QUEUE_DIR.glob("*.json"))
     if not files:
-        return 0
-    token = get_token()
-    if not token:
-        log("flush skipped: not signed in (run: track_usage.py login)")
         if verbose:
-            print("Not signed in — run: track_usage.py login")
+            print("Queue is empty.")
         return 0
+
+    dest = destination(cfg)
+    token = None
+    if dest == "sharepoint":
+        if not all(cfg.get(k) for k in ("tenant_id", "client_id", "site_id", "list_id")):
+            log("flush skipped: sharepoint config incomplete")
+            if verbose:
+                print("SharePoint config incomplete — run /cost-setup.")
+            return 0
+        token = get_token()
+        if not token:
+            log("flush skipped: not signed in (run: track_usage.py login)")
+            if verbose:
+                print("Not signed in — run: track_usage.py login")
+            return 0
+
     pushed = 0
     for p in files:
         inflight = p.with_suffix(".inflight")
@@ -447,7 +492,7 @@ def flush_queue(verbose=False):
         if not row:
             inflight.unlink(missing_ok=True)
             continue
-        err = push_row(cfg, token, row)
+        err = append_local(cfg, row) if dest == "local" else push_row(cfg, token, row)
         if err:
             os.rename(inflight, p)  # keep for next flush
             log(f"push failed for {p.name}: {json.dumps(err)[:300]}")
@@ -455,7 +500,8 @@ def flush_queue(verbose=False):
             inflight.unlink(missing_ok=True)
             pushed += 1
     if pushed:
-        log(f"pushed {pushed} row(s) to SharePoint")
+        target = str(local_file(cfg)) if dest == "local" else "SharePoint"
+        log(f"pushed {pushed} row(s) to {target}")
     if verbose:
         print(f"Pushed {pushed} row(s); {len(list(QUEUE_DIR.glob('*.json')))} remaining in queue.")
     return pushed
@@ -530,9 +576,6 @@ def cmd_resolve(args):
 
 def cmd_test(_args):
     cfg = load_config()
-    token = get_token()
-    if not token:
-        raise SystemExit("Not signed in — run: track_usage.py login")
     row = {
         "timestamp": now_iso(),
         "session_id": "test-session",
@@ -543,6 +586,15 @@ def cmd_test(_args):
         "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0,
         "cache_write_tokens": 0, "turns": 0, "cost_usd": 0.0,
     }
+    if destination(cfg) == "local":
+        err = append_local(cfg, row)
+        if err:
+            raise SystemExit(f"Test write FAILED: {err}")
+        print(f"Test row written to {local_file(cfg)}")
+        return 0
+    token = get_token()
+    if not token:
+        raise SystemExit("Not signed in — run: track_usage.py login")
     err = push_row(cfg, token, row)
     if err:
         raise SystemExit(f"Test push FAILED: {err}")
@@ -621,17 +673,24 @@ def cmd_report(args):
 
 def cmd_status(_args):
     cfg = load_config()
+    dest = destination(cfg)
     print(f"Config file : {CONFIG_PATH} ({'present' if CONFIG_PATH.exists() else 'MISSING'})")
-    for k in ("tenant_id", "client_id", "site_id", "list_id", "user_email"):
-        print(f"  {k:<12}: {'set' if cfg.get(k) else 'NOT SET'}")
+    print(f"  destination : {dest}")
     print(f"  enabled     : {cfg.get('enabled', True)}")
-    tok = load_json(TOKENS_PATH)
-    if tok:
-        left = int(tok.get("expires_at", 0) - time.time())
-        refresh = "yes" if tok.get("refresh_token") else "no"
-        print(f"Auth        : token {'valid ' + str(left) + 's' if left > 0 else 'expired'}, refresh token: {refresh}")
+    print(f"  user_email  : {'set' if cfg.get('user_email') else 'NOT SET (falls back to git config)'}")
+    if dest == "local":
+        p = local_file(cfg)
+        print(f"  local_file  : {p} ({'exists' if p.exists() else 'will be created'})")
     else:
-        print("Auth        : not signed in (run: track_usage.py login)")
+        for k in ("tenant_id", "client_id", "site_id", "list_id"):
+            print(f"  {k:<12}: {'set' if cfg.get(k) else 'NOT SET'}")
+        tok = load_json(TOKENS_PATH)
+        if tok:
+            left = int(tok.get("expires_at", 0) - time.time())
+            refresh = "yes" if tok.get("refresh_token") else "no"
+            print(f"Auth        : token {'valid ' + str(left) + 's' if left > 0 else 'expired'}, refresh token: {refresh}")
+        else:
+            print("Auth        : not signed in (run: track_usage.py login)")
     q = len(list(QUEUE_DIR.glob("*.json"))) if QUEUE_DIR.is_dir() else 0
     print(f"Queue       : {q} row(s) pending upload")
     n = sum(1 for _ in open(LEDGER_PATH)) if LEDGER_PATH.exists() else 0

@@ -1,5 +1,5 @@
 ---
-description: One-time setup for the cost-observability plugin (Azure AD app, SharePoint list, sign-in)
+description: One-time setup for the cost-observability plugin (choose local file or SharePoint destination)
 ---
 
 Walk the user through setting up the cost-observability plugin. The tracker script is at `${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py`; its config lives at `~/.claude/cost-observability/config.json`.
@@ -8,18 +8,28 @@ Follow these steps in order:
 
 1. **Check current state**: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" status` and show the result.
 
-2. **Collect config values** with AskUserQuestion (or read them from an existing config if already set):
-   - `tenant_id` — the Azure AD (Entra ID) tenant ID or domain (e.g. `contoso.onmicrosoft.com`). An admin usually provides this once for the whole team.
-   - `client_id` — the app registration's Application (client) ID. This is a one-time admin task: register a **public client** app in Entra ID with "Allow public client flows" enabled and delegated Microsoft Graph permission `Sites.ReadWrite.All` (admin-consented). Every developer reuses the same client_id.
+2. **Choose a destination** with AskUserQuestion:
+   - **Local file** — usage rows are appended to a CSV file on this machine. No sign-in, no admin setup. The file path is configurable, so it can point at a synced folder (OneDrive, network share) to share it with the team.
+   - **SharePoint List** — rows are uploaded to a central SharePoint List via Microsoft Graph. Requires a one-time Azure AD app registration by an admin.
+
+3. **If "Local file" was selected:**
+   - Ask (optional) for the CSV path; default is `~/.claude/cost-observability/usage.csv`. Expand `~` before saving.
+   - Ask (optional) for `user_email`; defaults to `git config --global user.email`.
+   - Write `~/.claude/cost-observability/config.json` with keys: `destination: "local"`, `local_file` (if given), `user_email` (if given), `enabled: true`. Merge with any existing config.
+   - Verify: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" test` and confirm the test row landed in the CSV. Done — do NOT ask for tenant/client IDs or run any sign-in.
+
+4. **If "SharePoint List" was selected**, collect with AskUserQuestion (or reuse existing config values):
+   - `tenant_id` — the Azure AD (Entra ID) tenant ID or domain (e.g. `contoso.onmicrosoft.com`).
+   - `client_id` — the app registration's Application (client) ID. One-time admin task: register a **public client** app in Entra ID with "Allow public client flows" enabled and delegated Microsoft Graph permission `Sites.ReadWrite.All` (admin-consented). Every developer reuses the same client_id.
    - `user_email` — optional; defaults to `git config --global user.email`.
    - The SharePoint **site URL** (e.g. `https://contoso.sharepoint.com/sites/Engineering`).
 
-3. **Write the config**: merge the values into `~/.claude/cost-observability/config.json` as JSON keys `tenant_id`, `client_id`, `user_email`, `enabled: true`. Do not overwrite existing `site_id`/`list_id` unless the user is changing sites.
+   Then:
+   1. Write the config: merge `destination: "sharepoint"`, `tenant_id`, `client_id`, `user_email`, `enabled: true` into the config JSON. Do not overwrite existing `site_id`/`list_id` unless the user is changing sites.
+   2. Sign in: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" login` in the foreground and show the user the device-code URL and code it prints. Wait for it to complete. This is an interactive Microsoft sign-in — the user completes it in their browser; you must never ask for or enter their password.
+   3. Create or connect the list:
+      - New list: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" create-list --site-url <SITE_URL> --name "Claude Cost Tracking"`
+      - Existing list: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" resolve --site-url <SITE_URL> --list "Claude Cost Tracking"`
+   4. Verify: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" test` and confirm the test row appears in the list.
 
-4. **Sign in**: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" login` in the foreground and show the user the device-code URL and code it prints. Wait for it to complete. This is an interactive Microsoft sign-in — the user completes it in their browser; you must never ask for or enter their password.
-
-5. **Create or connect the SharePoint list**:
-   - If the team list does not exist yet: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" create-list --site-url <SITE_URL> --name "Claude Cost Tracking"` (creates the list with all required columns and saves site/list IDs).
-   - If it already exists: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" resolve --site-url <SITE_URL> --list "Claude Cost Tracking"`.
-
-6. **Verify**: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" test` and confirm the test row appears. Then run `status` once more and summarize: tracking is now automatic — usage is recorded after every response and uploaded when a session ends.
+5. **Wrap up**: run `status` once more and summarize: tracking is now automatic — usage is recorded after every response and written to the chosen destination when a session ends.

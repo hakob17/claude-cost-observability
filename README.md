@@ -1,8 +1,14 @@
 # Cost Observability — Claude Code plugin
 
-Tracks every developer's Claude Code LLM usage (tokens + estimated USD cost) locally
-and aggregates it into **one central SharePoint List** for the whole team — cost per
-developer, per project, per model, per day, all in one place.
+Tracks every developer's Claude Code LLM usage (tokens + estimated USD cost) and
+aggregates it in one place — cost per developer, per project, per model, per day.
+
+Two destinations, chosen during setup:
+
+| Destination | Setup effort | Best for |
+|---|---|---|
+| **Local CSV file** (default) | none — works out of the box, no sign-in | individuals, or teams sharing via a synced folder (OneDrive / network share) |
+| **SharePoint List** | one-time Azure AD app registration by an admin | a true central team dashboard (Excel / Power BI on top) |
 
 ---
 
@@ -16,9 +22,13 @@ Claude Code session (developer's machine)
   │
   │  SessionEnd hook — fires when the session ends
   │    └─ computes what's new since the last upload → queues a row
-  │       → pushes queued rows to SharePoint via Microsoft Graph
+  │       → writes queued rows to the configured destination
   ▼
-SharePoint List  "Claude Cost Tracking"
+┌───────────────────────────────┐   ┌─────────────────────────────────────┐
+│ Local CSV (destination=local) │ or │ SharePoint List (destination=       │
+│ ~/.claude/cost-observability/ │   │ sharepoint) via Microsoft Graph      │
+│ usage.csv — path configurable │   │ "Claude Cost Tracking"               │
+└───────────────────────────────┘   └─────────────────────────────────────┘
   one row per (session, model):
   user email · machine · project · input/output tokens · cache tokens · turns · cost USD
 ```
@@ -31,9 +41,10 @@ SharePoint List  "Claude Cost Tracking"
    cache-read at 0.1×, cache-write at 1.25×/2× input price, per million tokens).
    Update `PRICING` in [`scripts/track_usage.py`](scripts/track_usage.py) when
    Anthropic pricing changes.
-3. **Uploading** — when the session ends, the `SessionEnd` hook computes the
-   *delta* since the last upload and pushes one row per model to the SharePoint
-   List through the Microsoft Graph API, authenticated as the developer.
+3. **Delivering** — when the session ends, the `SessionEnd` hook computes the
+   *delta* since the last upload and writes one row per model to the configured
+   destination: appended to the local CSV, or pushed to the SharePoint List
+   through the Microsoft Graph API (authenticated as the developer).
 
 ### Reliability properties
 
@@ -60,7 +71,7 @@ to pause uploads (the local ledger keeps recording).
 
 ## Installation
 
-### 0. One-time admin setup (once per team)
+### 0. One-time admin setup (SharePoint destination only — skip for local CSV)
 
 1. **Azure AD app registration** (Entra ID → App registrations → New):
    - Supported account types: single tenant.
@@ -105,16 +116,25 @@ Or auto-install for everyone working in a repo by committing this to that repo's
 /cost-setup
 ```
 
-The guided setup will:
+The guided setup first asks **where the data should go**:
 
-1. Ask for the **tenant ID**, **client ID** (from the admin) and the SharePoint
+**Local file** (no admin setup, no sign-in):
+1. Optionally pick the CSV path — default
+   `~/.claude/cost-observability/usage.csv`. Point it at a OneDrive or
+   network-share folder to share usage with the team without any Azure setup.
+2. A test row is written to verify. Done.
+
+**SharePoint List** (asks for Azure details only on this path):
+1. Enter the **tenant ID** and **client ID** (from the admin) and the SharePoint
    **site URL**; your email defaults to `git config user.email`.
-2. Sign you into Microsoft with a **device code** — you open a URL, type the
-   code, done. No passwords or secrets are handled by the plugin.
-3. Create the SharePoint list (first developer) or connect to the existing one.
-4. Push a test row to verify end-to-end.
+2. Sign into Microsoft with a **device code** — open a URL, type the code, done.
+   No passwords or secrets are handled by the plugin.
+3. The setup creates the SharePoint list (first developer) or connects to the
+   existing one, then pushes a test row to verify end-to-end.
 
-After that, tracking is fully automatic — nothing else to do.
+After that, tracking is fully automatic — nothing else to do. Even without
+running `/cost-setup` at all, the plugin defaults to local-CSV mode and starts
+recording immediately after install.
 
 ---
 
