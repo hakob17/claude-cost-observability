@@ -135,6 +135,20 @@ async def ingest(request: Request, _: str = Depends(require_ingest)):
     return {"ok": True, "received": len(clean), "inserted": inserted}
 
 
+# ------------------------------------------------------------------ admin ops
+
+@app.post("/api/clear")
+async def clear(request: Request, _: str = Depends(require_admin)):
+    """Delete usage data. Requires an explicit typed confirmation to avoid
+    accidental wipes. Body: {"confirm": "DELETE", "days": <int|null>}."""
+    body = await request.json()
+    if body.get("confirm") != "DELETE":
+        raise HTTPException(status_code=400, detail='type "DELETE" to confirm')
+    days = body.get("days")
+    deleted = db.clear_rows(days=int(days) if days else None)
+    return {"ok": True, "deleted": deleted}
+
+
 # ------------------------------------------------------------------ analytics
 
 @app.get("/api/stats")

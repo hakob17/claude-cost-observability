@@ -262,6 +262,23 @@ table.sortable th.on.desc::after { content: " ↓"; opacity: 1; }
   transform-origin: left; pointer-events: none;
 }
 
+/* Danger zone */
+
+.panel.danger { border-color: rgba(224, 108, 108, 0.35); }
+.danger-title { color: var(--red); }
+.danger-controls { display: flex; gap: 10px; align-items: center; }
+.danger-controls select {
+  background: var(--bg); border: 1px solid var(--line-strong); color: var(--ink);
+  font: 400 11px var(--mono); padding: 8px 10px; outline: none;
+}
+.danger-btn {
+  background: transparent; border: 1px solid var(--red); color: var(--red);
+  font: 600 11px var(--mono); letter-spacing: 0.12em; padding: 8px 16px; cursor: pointer;
+  transition: all 0.14s;
+}
+.danger-btn:hover { background: var(--red); color: #150404; box-shadow: 0 0 20px rgba(224, 108, 108, 0.45); }
+.danger-hint { color: var(--dim); font-size: 10.5px; margin-top: 12px; }
+
 /* Tokens panel */
 
 .token-new { display: flex; gap: 10px; margin-bottom: 16px; }

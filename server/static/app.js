@@ -191,6 +191,26 @@
     loadTokens();
   });
 
+  // ------------------------------------------------------------- clear data
+
+  $("#clear-btn").addEventListener("click", async () => {
+    const scope = $("#clear-scope").value;
+    const label = scope ? `the last ${scope} days` : "ALL usage data";
+    if (!confirm(`Permanently delete ${label}? This cannot be undone.`)) return;
+    const typed = prompt(`Type DELETE to confirm wiping ${label}:`);
+    if (typed !== "DELETE") {
+      if (typed !== null) alert("Not deleted — confirmation text did not match.");
+      return;
+    }
+    const res = await api("/api/clear", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: "DELETE", days: scope ? Number(scope) : null }),
+    });
+    alert(`Deleted ${res.deleted} row(s).`);
+    refresh().catch(() => {});
+  });
+
   // ------------------------------------------------------------- data
 
   async function loadRows() {

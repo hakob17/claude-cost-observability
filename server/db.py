@@ -247,6 +247,14 @@ def query_rows(days=30, user=None, project=None, limit=None, order_by="ts", orde
     return _read(q, params)
 
 
+def clear_rows(days=None):
+    """Delete usage rows. days=None wipes everything; else only rows in the
+    last N days. Returns the number of rows deleted."""
+    if days is None:
+        return _write("DELETE FROM usage_rows")
+    return _write("DELETE FROM usage_rows WHERE ts >= ?", (_cutoff(days),))
+
+
 def stats(days=30):
     cutoff = _cutoff(days)
     conn = connect()

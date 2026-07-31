@@ -143,6 +143,23 @@
     </div>
   </section>
 
+  <section class="panel danger">
+    <div class="panel-row">
+      <h2 class="panel-title danger-title">── DANGER ZONE ──────────────────────────</h2>
+      <div class="danger-controls">
+        <select id="clear-scope">
+          <option value="">ALL TIME</option>
+          <option value="7">LAST 7 DAYS</option>
+          <option value="30">LAST 30 DAYS</option>
+          <option value="90">LAST 90 DAYS</option>
+        </select>
+        <button id="clear-btn" class="danger-btn">🗑 CLEAR DATA</button>
+      </div>
+    </div>
+    <p class="danger-hint">Permanently deletes usage rows from the database. This cannot be undone.
+      Ingest tokens are not affected.</p>
+  </section>
+
   <footer class="dash-foot">
     cost-observability &middot; figures are API list-price equivalents, not invoices
   </footer>
