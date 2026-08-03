@@ -12,6 +12,7 @@ Follow these steps in order:
    - **Local file** — usage rows are appended to a CSV file on this machine. No sign-in, no admin setup. The file path is configurable, so it can point at a synced folder (OneDrive, network share) to share it with the team.
    - **Team sync server** — rows are uploaded to the team's cost-observability server (the `server/` app in this repo) which stores them in a database and serves an analytics dashboard. Needs only the server URL and an ingest token from whoever runs the server.
    - **SharePoint List** — rows are uploaded to a central SharePoint List via Microsoft Graph. Requires a one-time Azure AD app registration by an admin.
+   - **OneDrive Excel (compliance)** — rows are appended to one shared Excel workbook (an .xlsx an admin created in OneDrive/SharePoint and shared with the team). All users write to the same file's `Usage` table. Requires the same Azure AD app registration (with `Files.ReadWrite.All`) and the admin to create the table once.
 
 2b. **If "Team sync server" was selected:**
    - First check the environment: if `COST_OBS_SERVER_URL` and `COST_OBS_SERVER_TOKEN` are already set, no config values are needed — just write `destination: "server"`, `enabled: true` and skip to verification.
@@ -40,4 +41,13 @@ Follow these steps in order:
       - Existing list: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" resolve --site-url <SITE_URL> --list "Claude Cost Tracking"`
    4. Verify: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" test` and confirm the test row appears in the list.
 
-5. **Wrap up**: run `status` once more and summarize: tracking is now automatic — usage is recorded after every response and written to the chosen destination when a session ends.
+6. **If "OneDrive Excel (compliance)" was selected**, collect (or reuse) `tenant_id`, `client_id` (same public-client Azure AD app as SharePoint, but the delegated Graph permission must include **`Files.ReadWrite.All`**, admin-consented), and optional `user_email`. Then determine role:
+   - **Admin doing first-time setup** (creating the shared file): the admin creates a blank Excel workbook in OneDrive/SharePoint, clicks **Share → anyone/people in org with edit access → Copy link**, then:
+     1. Write config: merge `destination: "excel"`, `tenant_id`, `client_id`, `excel_share_url: "<the copied link>"`, `enabled: true`.
+     2. Sign in: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" login` (interactive device-code — never handle their password).
+     3. Create the table once: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" create-excel --share-url "<the copied link>"`.
+     4. Verify: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" test`.
+   - **A regular user** (the admin already created the file/table): check env first — if `COST_OBS_EXCEL_URL` is set, just write `destination: "excel"` + `tenant_id`/`client_id` and skip to sign-in. Otherwise write config with `excel_share_url` set to the **same link the admin shared**, then run `login`, then `test`. Do NOT run `create-excel` (only the admin does that).
+   - Note: all users appending to one file can briefly contend for the file lock; the plugin batches each user's rows into one write and retries on lock, and the local queue means a busy file causes a retry, never a lost row.
+
+7. **Wrap up**: run `status` once more and summarize: tracking is now automatic — usage is recorded after every response and written to the chosen destination when a session ends.

@@ -44,7 +44,19 @@ LEDGER_PATH = BASE_DIR / "ledger.jsonl"
 LOG_PATH = BASE_DIR / "log.txt"
 
 GRAPH = "https://graph.microsoft.com/v1.0"
-SCOPES = "https://graph.microsoft.com/Sites.ReadWrite.All offline_access openid profile"
+# Sites.ReadWrite.All -> SharePoint List; Files.ReadWrite.All -> a shared
+# OneDrive/SharePoint Excel workbook (compliance destination).
+SCOPES = ("https://graph.microsoft.com/Sites.ReadWrite.All "
+          "https://graph.microsoft.com/Files.ReadWrite.All "
+          "offline_access openid profile")
+
+EXCEL_TABLE = "Usage"
+# Column order for the Excel table (row_id first so retries are dedupable).
+EXCEL_COLUMNS = [
+    "row_id", "timestamp", "session_id", "user_email", "host", "project",
+    "model", "input_tokens", "output_tokens", "cache_read_tokens",
+    "cache_write_tokens", "turns", "cost_usd",
+]
 
 # USD per 1M tokens: (input, output). Longest matching prefix wins.
 # Cache read = 0.1x input; cache write = 1.25x (5m TTL) / 2x (1h TTL) input.
@@ -116,11 +128,18 @@ def destination(cfg):
     """
     if cfg.get("destination"):
         return cfg["destination"]
+    if cfg.get("excel_share_url") or os.environ.get("COST_OBS_EXCEL_URL"):
+        return "excel"
     if cfg.get("list_id"):
         return "sharepoint"
     if cfg.get("server_url") or os.environ.get("COST_OBS_SERVER_URL"):
         return "server"
     return "local"
+
+
+def excel_url(cfg):
+    """The shared workbook's sharing link (env var wins, for VDI images)."""
+    return os.environ.get("COST_OBS_EXCEL_URL") or cfg.get("excel_share_url")
 
 
 def server_settings(cfg):
@@ -487,6 +506,95 @@ def push_row_server(cfg, row):
     return err
 
 
+# --------------------------------------------------- OneDrive/SharePoint Excel
+
+def encode_share_url(url):
+    """Encode a sharing link into a Graph shares/ id (u! + base64url, no pad)."""
+    import base64
+    b = base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")
+    return "u!" + b
+
+
+def resolve_excel(cfg, token):
+    """Return (drive_id, item_id) for the shared workbook, caching in config."""
+    if cfg.get("excel_drive_id") and cfg.get("excel_item_id"):
+        return cfg["excel_drive_id"], cfg["excel_item_id"]
+    url = excel_url(cfg)
+    if not url:
+        return None, None
+    item, err = http_json(
+        f"{GRAPH}/shares/{encode_share_url(url)}/driveItem?$select=id,parentReference",
+        headers=graph_headers(token),
+    )
+    if err or not item:
+        log(f"excel resolve failed: {json.dumps(err)[:200]}")
+        return None, None
+    drive_id = item.get("parentReference", {}).get("driveId")
+    item_id = item.get("id")
+    if drive_id and item_id:  # cache so we skip the lookup next time
+        cfg["excel_drive_id"] = drive_id
+        cfg["excel_item_id"] = item_id
+        save_json(CONFIG_PATH, cfg)
+    return drive_id, item_id
+
+
+def ensure_excel_table(token, drive_id, item_id):
+    """Create the header row + named table on first setup (admin, idempotent)."""
+    base = f"{GRAPH}/drives/{drive_id}/items/{item_id}/workbook"
+    # If the table already exists, we're done.
+    existing, _ = http_json(f"{base}/tables/{EXCEL_TABLE}", headers=graph_headers(token))
+    if existing and existing.get("name"):
+        return None
+    # Write the header row to Sheet1!A1 then define a table over it.
+    end_col = chr(ord("A") + len(EXCEL_COLUMNS) - 1)
+    rng = f"A1:{end_col}1"
+    _, err = http_json(
+        f"{base}/worksheets('Sheet1')/range(address='{rng}')",
+        {"values": [EXCEL_COLUMNS]}, headers=graph_headers(token), method="PATCH",
+    )
+    if err:
+        return err
+    _, err = http_json(
+        f"{base}/tables/add",
+        {"address": f"Sheet1!{rng}", "hasHeaders": True},
+        headers=graph_headers(token),
+    )
+    if err:
+        return err
+    # Name the freshly-created table so we can target it by name.
+    tables, _ = http_json(f"{base}/tables?$select=id,name", headers=graph_headers(token))
+    tid = (tables or {}).get("value", [{}])[-1].get("id")
+    if tid:
+        http_json(f"{base}/tables/{tid}", {"name": EXCEL_TABLE},
+                  headers=graph_headers(token), method="PATCH")
+    return None
+
+
+def push_rows_excel(cfg, token, rows):
+    """Append rows to the shared workbook's table in ONE call (less contention).
+
+    Retries on 423 (locked) / 409 (conflict) so concurrent writers back off
+    instead of losing rows; a persistent failure keeps them queued."""
+    drive_id, item_id = resolve_excel(cfg, token)
+    if not drive_id or not item_id:
+        return {"error": {"code": "excel_unresolved", "message": "cannot locate workbook"}}
+    values = [[r.get(c) for c in EXCEL_COLUMNS] for r in rows]
+    endpoint = (f"{GRAPH}/drives/{drive_id}/items/{item_id}/workbook/"
+                f"tables/{EXCEL_TABLE}/rows/add")
+    delay = 1.0
+    for attempt in range(5):
+        _, err = http_json(endpoint, {"values": values}, headers=graph_headers(token))
+        if not err:
+            return None
+        code = str((err.get("error") or {}).get("code", ""))
+        if any(k in code.lower() for k in ("locked", "conflict", "busy")) or code in ("423", "409"):
+            time.sleep(delay)
+            delay = min(delay * 2, 8)
+            continue
+        return err
+    return {"error": {"code": "locked", "message": "workbook busy after retries"}}
+
+
 def reclaim_inflight(max_age_sec=120):
     """Recover rows orphaned as *.inflight by a crash/power-loss mid-upload.
 
@@ -547,6 +655,19 @@ def flush_queue(verbose=False):
             if verbose:
                 print("Not signed in — run: track_usage.py login")
             return 0
+    elif dest == "excel":
+        if not excel_url(cfg) or not cfg.get("client_id"):
+            log("flush skipped: excel config incomplete")
+            if verbose:
+                print("Excel config incomplete — run /cost-setup.")
+            return 0
+        token = get_token()
+        if not token:
+            log("flush skipped: not signed in (run: track_usage.py login)")
+            if verbose:
+                print("Not signed in — run: track_usage.py login")
+            return 0
+        return _flush_excel_batch(cfg, token, files, verbose)
 
     pushed = 0
     for p in files:
@@ -577,6 +698,44 @@ def flush_queue(verbose=False):
     if verbose:
         print(f"Pushed {pushed} row(s); {len(list(QUEUE_DIR.glob('*.json')))} remaining in queue.")
     return pushed
+
+
+def _flush_excel_batch(cfg, token, files, verbose=False):
+    """Excel: claim all queued rows and append them in ONE workbook call.
+
+    Batching minimizes writes to the shared file (less lock contention). All
+    rows succeed or all are restored to the queue, so nothing is lost."""
+    claimed = []
+    for p in files:
+        inflight = p.with_suffix(".inflight")
+        try:
+            os.rename(p, inflight)
+        except OSError:
+            continue
+        row = load_json(inflight)
+        if row:
+            claimed.append((inflight, p, row))
+        else:
+            inflight.unlink(missing_ok=True)
+    if not claimed:
+        return 0
+    err = push_rows_excel(cfg, token, [c[2] for c in claimed])
+    if err:
+        for inflight, p, _ in claimed:  # restore the whole batch for next flush
+            try:
+                os.rename(inflight, p)
+            except OSError:
+                pass
+        log(f"excel push failed for {len(claimed)} row(s): {json.dumps(err)[:300]}")
+        if verbose:
+            print(f"Excel push failed: {err}")
+        return 0
+    for inflight, _, _ in claimed:
+        inflight.unlink(missing_ok=True)
+    log(f"appended {len(claimed)} row(s) to shared Excel workbook")
+    if verbose:
+        print(f"Appended {len(claimed)} row(s) to the shared Excel workbook.")
+    return len(claimed)
 
 
 # --------------------------------------------------------- site/list setup
@@ -678,10 +837,45 @@ def cmd_test(_args):
     token = get_token()
     if not token:
         raise SystemExit("Not signed in — run: track_usage.py login")
+    if destination(cfg) == "excel":
+        row["row_id"] = uuid.uuid4().hex
+        err = push_rows_excel(cfg, token, [row])
+        if err:
+            raise SystemExit(f"Test append FAILED: {err}\n"
+                             "(has the admin run create-excel to make the table?)")
+        print("Test row appended to the shared Excel workbook — check the file.")
+        return 0
     err = push_row(cfg, token, row)
     if err:
         raise SystemExit(f"Test push FAILED: {err}")
     print("Test row pushed successfully — check the SharePoint list.")
+    return 0
+
+
+def cmd_create_excel(args):
+    """Admin, once: ensure the table exists in the shared workbook."""
+    cfg = load_config()
+    if args.share_url:
+        cfg["excel_share_url"] = args.share_url
+        cfg["destination"] = "excel"
+        cfg.pop("excel_drive_id", None)
+        cfg.pop("excel_item_id", None)
+        save_json(CONFIG_PATH, cfg)
+    if not excel_url(cfg):
+        raise SystemExit("No workbook URL — pass --share-url <sharing link>.")
+    token = get_token()
+    if not token:
+        raise SystemExit("Not signed in — run: track_usage.py login")
+    drive_id, item_id = resolve_excel(cfg, token)
+    if not drive_id:
+        raise SystemExit("Could not open the shared workbook — check the sharing link "
+                         "and that you have edit access.")
+    err = ensure_excel_table(token, drive_id, item_id)
+    if err:
+        raise SystemExit(f"Table setup FAILED: {err}")
+    print(f"Workbook ready — table '{EXCEL_TABLE}' with {len(EXCEL_COLUMNS)} columns.\n"
+          "Share the file (edit access) with your team; each user runs /cost-setup,\n"
+          "picks OneDrive Excel, pastes the same link, and signs in.")
     return 0
 
 
@@ -848,6 +1042,13 @@ def cmd_status(_args):
         src_t = " (from env)" if os.environ.get("COST_OBS_SERVER_TOKEN") else ""
         print(f"  server_url  : {(url or 'NOT SET') + src_u}")
         print(f"  server_token: {('set' + src_t) if tok else 'NOT SET'}")
+    elif dest == "excel":
+        src = " (from env)" if os.environ.get("COST_OBS_EXCEL_URL") else ""
+        print(f"  excel_url   : {('set' + src) if excel_url(cfg) else 'NOT SET'}")
+        print(f"  client_id   : {'set' if cfg.get('client_id') else 'NOT SET'}")
+        print(f"  workbook    : {'resolved' if cfg.get('excel_item_id') else 'not resolved yet'}")
+        tok = load_json(TOKENS_PATH)
+        print(f"Auth        : {'signed in' if tok else 'not signed in (run: track_usage.py login)'}")
     else:
         for k in ("tenant_id", "client_id", "site_id", "list_id"):
             print(f"  {k:<12}: {'set' if cfg.get(k) else 'NOT SET'}")
@@ -885,6 +1086,8 @@ def main():
     p = sub.add_parser("resolve")
     p.add_argument("--site-url", required=True)
     p.add_argument("--list", required=True)
+    p = sub.add_parser("create-excel")
+    p.add_argument("--share-url", help="sharing link to the admin's Excel workbook")
     args = parser.parse_args()
 
     if args.cmd in (None, "hook"):
@@ -904,6 +1107,8 @@ def main():
         return cmd_create_list(args)
     if args.cmd == "resolve":
         return cmd_resolve(args)
+    if args.cmd == "create-excel":
+        return cmd_create_excel(args)
     return 0
 
 

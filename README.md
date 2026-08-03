@@ -10,6 +10,7 @@ Three destinations, chosen during setup:
 | **Local CSV file** (default) | none — works out of the box, no sign-in | individuals, or teams sharing via a synced folder (OneDrive / network share) |
 | **Team sync server** | run the bundled [`server/`](server/README.md) app (FastAPI + Postgres/SQLite) | central DB + the **Cost Observatory** analytics dashboard with login and Excel/CSV/JSON export. Deployed on Railway: https://claude-cost-observability-production.up.railway.app |
 | **SharePoint List** | one-time Azure AD app registration by an admin | Microsoft 365 shops that want the data in SharePoint (Excel / Power BI on top) |
+| **OneDrive Excel** (compliance) | Azure AD app + admin creates one shared .xlsx | when compliance needs the record to be a literal Excel file in M365; all users append rows to one admin-owned workbook |
 
 For the sync server, developers enter just the server URL and an ingest token
 during `/cost-setup` (or set `COST_OBS_SERVER_URL` / `COST_OBS_SERVER_TOKEN`
@@ -207,6 +208,27 @@ The guided setup first asks **where the data should go**:
    No passwords or secrets are handled by the plugin.
 3. The setup creates the SharePoint list (first developer) or connects to the
    existing one, then pushes a test row to verify end-to-end.
+
+**OneDrive Excel** (one shared workbook, all users append rows to it):
+1. **Admin, once:** create a blank `.xlsx` in OneDrive/SharePoint → **Share →
+   edit access → Copy link**. Register the same Azure AD app but grant delegated
+   **`Files.ReadWrite.All`**. Then sign in and build the table:
+   ```bash
+   python3 scripts/track_usage.py login
+   python3 scripts/track_usage.py create-excel --share-url "<shared link>"
+   ```
+   This creates a `Usage` table with a `row_id` column (so any retry duplicate
+   is dedupable in analysis). Share the link with the team.
+2. **Each user:** `/cost-setup` → *OneDrive Excel* → paste the **same link** +
+   tenant/client IDs → sign in with a device code. (Or set `COST_OBS_EXCEL_URL`
+   in the environment for zero-touch onboarding.)
+
+   All users write to the one file. To keep the shared file from becoming a
+   write bottleneck, each machine batches its queued rows into a single append
+   and retries on file-lock — and because every row is buffered in the local
+   queue first, a busy/locked file causes a retry, **never a lost record**
+   (important for a compliance store). The service/admin analyzes the workbook
+   directly (Excel, Power Query, Power BI).
 
 After that, tracking is fully automatic — nothing else to do. Even without
 running `/cost-setup` at all, the plugin defaults to local-CSV mode and starts
