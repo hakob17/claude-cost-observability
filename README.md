@@ -210,18 +210,20 @@ The guided setup first asks **where the data should go**:
    existing one, then pushes a test row to verify end-to-end.
 
 **OneDrive Excel** (one shared workbook, all users append rows to it):
-1. **Admin, once:** create a blank `.xlsx` in OneDrive/SharePoint → **Share →
-   edit access → Copy link**. Register the same Azure AD app but grant delegated
-   **`Files.ReadWrite.All`**. Then sign in and build the table:
-   ```bash
-   python3 scripts/track_usage.py login
-   python3 scripts/track_usage.py create-excel --share-url "<shared link>"
-   ```
-   This creates a `Usage` table with a `row_id` column (so any retry duplicate
-   is dedupable in analysis). Share the link with the team.
+1. **Admin, UI only — no scripts to run:** create a blank `.xlsx` in
+   OneDrive/SharePoint → **Share → edit access → Copy link**, and register the
+   same Azure AD app but grant delegated **`Files.ReadWrite.All`**. Share the
+   link + tenant/client IDs with the team. That's it — the plugin builds the
+   `Usage` table (with a `row_id` column, so any retry duplicate is dedupable)
+   **automatically on the first row any user writes**.
 2. **Each user:** `/cost-setup` → *OneDrive Excel* → paste the **same link** +
    tenant/client IDs → sign in with a device code. (Or set `COST_OBS_EXCEL_URL`
-   in the environment for zero-touch onboarding.)
+   in the environment for zero-touch onboarding.) The first user's session
+   creates the table; everyone after just appends.
+
+   > Admins who *can* run scripts may pre-build the table with
+   > `python3 scripts/track_usage.py create-excel --share-url "<link>"`, but
+   > it's optional now.
 
    All users write to the one file. To keep the shared file from becoming a
    write bottleneck, each machine batches its queued rows into a single append

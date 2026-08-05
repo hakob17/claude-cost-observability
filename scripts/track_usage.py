@@ -541,26 +541,33 @@ def resolve_excel(cfg, token):
 def ensure_excel_table(token, drive_id, item_id):
     """Create the header row + named table on first setup (admin, idempotent)."""
     base = f"{GRAPH}/drives/{drive_id}/items/{item_id}/workbook"
-    # If the table already exists, we're done.
+    # If the table already exists, we're done (also resolves the create race:
+    # a second concurrent writer sees the table the first one just made).
     existing, _ = http_json(f"{base}/tables/{EXCEL_TABLE}", headers=graph_headers(token))
     if existing and existing.get("name"):
         return None
-    # Write the header row to Sheet1!A1 then define a table over it.
+    # Target the FIRST worksheet by name (locale-safe — not hardcoded 'Sheet1',
+    # which is wrong on non-English tenants or if the admin renamed the sheet).
+    sheets, _ = http_json(f"{base}/worksheets?$select=name", headers=graph_headers(token))
+    ws = (sheets or {}).get("value", [])
+    sheet = ws[0]["name"] if ws else "Sheet1"
     end_col = chr(ord("A") + len(EXCEL_COLUMNS) - 1)
     rng = f"A1:{end_col}1"
     _, err = http_json(
-        f"{base}/worksheets('Sheet1')/range(address='{rng}')",
+        f"{base}/worksheets('{sheet}')/range(address='{rng}')",
         {"values": [EXCEL_COLUMNS]}, headers=graph_headers(token), method="PATCH",
     )
     if err:
         return err
     _, err = http_json(
         f"{base}/tables/add",
-        {"address": f"Sheet1!{rng}", "hasHeaders": True},
+        {"address": f"'{sheet}'!{rng}", "hasHeaders": True},
         headers=graph_headers(token),
     )
     if err:
-        return err
+        # Lost a create race — if the table now exists, treat as success.
+        again, _ = http_json(f"{base}/tables/{EXCEL_TABLE}", headers=graph_headers(token))
+        return None if (again and again.get("name")) else err
     # Name the freshly-created table so we can target it by name.
     tables, _ = http_json(f"{base}/tables?$select=id,name", headers=graph_headers(token))
     tid = (tables or {}).get("value", [{}])[-1].get("id")
@@ -573,8 +580,10 @@ def ensure_excel_table(token, drive_id, item_id):
 def push_rows_excel(cfg, token, rows):
     """Append rows to the shared workbook's table in ONE call (less contention).
 
-    Retries on 423 (locked) / 409 (conflict) so concurrent writers back off
-    instead of losing rows; a persistent failure keeps them queued."""
+    Auto-creates the table on first write if the admin never made one (so an
+    admin who cannot run scripts only has to create + share the file in the UI).
+    Retries on 423/409 lock so concurrent writers back off instead of losing
+    rows; a persistent failure keeps them queued."""
     drive_id, item_id = resolve_excel(cfg, token)
     if not drive_id or not item_id:
         return {"error": {"code": "excel_unresolved", "message": "cannot locate workbook"}}
@@ -582,15 +591,29 @@ def push_rows_excel(cfg, token, rows):
     endpoint = (f"{GRAPH}/drives/{drive_id}/items/{item_id}/workbook/"
                 f"tables/{EXCEL_TABLE}/rows/add")
     delay = 1.0
-    for attempt in range(5):
+    provisioned = False
+    for attempt in range(6):
         _, err = http_json(endpoint, {"values": values}, headers=graph_headers(token))
         if not err:
             return None
-        code = str((err.get("error") or {}).get("code", ""))
-        if any(k in code.lower() for k in ("locked", "conflict", "busy")) or code in ("423", "409"):
+        e = err.get("error") or {}
+        code = str(e.get("code", "")).lower()
+        msg = str(e.get("message", "")).lower()
+        if any(k in code for k in ("locked", "conflict", "busy")) or code in ("423", "409"):
             time.sleep(delay)
             delay = min(delay * 2, 8)
             continue
+        # Table not created yet → build it once, then retry the append.
+        table_missing = ("itemnotfound" in code or "notfound" in code
+                         or "invalidargument" in code
+                         or ("not" in msg and "found" in msg)
+                         or "does not exist" in msg)
+        if not provisioned and table_missing:
+            provisioned = True
+            terr = ensure_excel_table(token, drive_id, item_id)
+            if terr:
+                return terr
+            continue  # retry the append now that the table exists
         return err
     return {"error": {"code": "locked", "message": "workbook busy after retries"}}
 

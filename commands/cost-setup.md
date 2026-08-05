@@ -41,13 +41,13 @@ Follow these steps in order:
       - Existing list: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" resolve --site-url <SITE_URL> --list "Claude Cost Tracking"`
    4. Verify: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" test` and confirm the test row appears in the list.
 
-6. **If "OneDrive Excel (compliance)" was selected**, collect (or reuse) `tenant_id`, `client_id` (same public-client Azure AD app as SharePoint, but the delegated Graph permission must include **`Files.ReadWrite.All`**, admin-consented), and optional `user_email`. Then determine role:
-   - **Admin doing first-time setup** (creating the shared file): the admin creates a blank Excel workbook in OneDrive/SharePoint, clicks **Share → anyone/people in org with edit access → Copy link**, then:
-     1. Write config: merge `destination: "excel"`, `tenant_id`, `client_id`, `excel_share_url: "<the copied link>"`, `enabled: true`.
+6. **If "OneDrive Excel (compliance)" was selected**:
+   - **Admin prerequisite (UI only — no scripts):** the admin creates a blank Excel workbook in OneDrive/SharePoint, clicks **Share → people in org with edit access → Copy link**, and shares that link + the `tenant_id`/`client_id` with the team. The admin does **not** need to run anything — the plugin creates the `Usage` table automatically on the first row written by any user.
+   - **Every user (including the admin, if they use Claude Code):** collect (or reuse) `tenant_id`, `client_id` (same public-client Azure AD app as SharePoint, but the delegated Graph permission must include **`Files.ReadWrite.All`**, admin-consented) and optional `user_email`. Then:
+     1. Check env: if `COST_OBS_EXCEL_URL` is set, just write `destination: "excel"` + `tenant_id`/`client_id`. Otherwise also write `excel_share_url` = the **same link the admin shared**.
      2. Sign in: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" login` (interactive device-code — never handle their password).
-     3. Create the table once: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" create-excel --share-url "<the copied link>"`.
-     4. Verify: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" test`.
-   - **A regular user** (the admin already created the file/table): check env first — if `COST_OBS_EXCEL_URL` is set, just write `destination: "excel"` + `tenant_id`/`client_id` and skip to sign-in. Otherwise write config with `excel_share_url` set to the **same link the admin shared**, then run `login`, then `test`. Do NOT run `create-excel` (only the admin does that).
+     3. Verify: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" test`. The first user to do this auto-creates the table; everyone after just appends.
+   - `create-excel` still exists for admins who *can* run scripts and want the table pre-built, but it is now optional.
    - Note: all users appending to one file can briefly contend for the file lock; the plugin batches each user's rows into one write and retries on lock, and the local queue means a busy file causes a retry, never a lost row.
 
 7. **Wrap up**: run `status` once more and summarize: tracking is now automatic — usage is recorded after every response and written to the chosen destination when a session ends.
