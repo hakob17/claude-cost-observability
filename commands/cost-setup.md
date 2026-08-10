@@ -13,6 +13,7 @@ Follow these steps in order:
    - **Team sync server** — rows are uploaded to the team's cost-observability server (the `server/` app in this repo) which stores them in a database and serves an analytics dashboard. Needs only the server URL and an ingest token from whoever runs the server.
    - **SharePoint List** — rows are uploaded to a central SharePoint List via Microsoft Graph. Requires a one-time Azure AD app registration by an admin.
    - **OneDrive Excel (compliance)** — rows are appended to one shared Excel workbook (an .xlsx an admin created in OneDrive/SharePoint and shared with the team). All users write to the same file's `Usage` table. Requires the same Azure AD app registration (with `Files.ReadWrite.All`) and the admin to create the table once.
+   - **GitHub repo** — the plugin pushes each developer's usage as a per-user CSV to a private git repo (reuses existing git access — no Azure app, no sign-in). A GitHub Action computes costs and renders `REPORT.md`. Best when the team already has GitHub and wants to avoid Microsoft app registration.
 
 2b. **If "Team sync server" was selected:**
    - First check the environment: if `COST_OBS_SERVER_URL` and `COST_OBS_SERVER_TOKEN` are already set, no config values are needed — just write `destination: "server"`, `enabled: true` and skip to verification.
@@ -50,4 +51,10 @@ Follow these steps in order:
    - `create-excel` still exists for admins who *can* run scripts and want the table pre-built, but it is now optional.
    - Note: all users appending to one file can briefly contend for the file lock; the plugin batches each user's rows into one write and retries on lock, and the local queue means a busy file causes a retry, never a lost row.
 
-7. **Wrap up**: run `status` once more and summarize: tracking is now automatic — usage is recorded after every response and written to the chosen destination when a session ends.
+8. **If "GitHub repo" was selected**:
+   - **Admin prerequisite (once):** create a private repo from the `telemetry-repo/` template in the plugin repo (contains `data/`, `report.py`, `pricing.json`, and the Action), push it so `main` exists, and give the dev team push access.
+   - **Each user:** check env first — if `COST_OBS_GIT_REPO` is set, just write `destination: "git"`. Otherwise ask for the repo's **clone URL** (SSH like `git@github.com:org/telemetry.git`, or HTTPS) and write config: `destination: "git"`, `git_repo: "<url>"`, optional `git_branch` (default `main`), optional `user_email`, `enabled: true`.
+   - No sign-in, no tenant/client IDs — the plugin uses the user's existing git credentials (SSH key / PAT / credential manager). Confirm the user can already `git clone`/`push` that repo.
+   - Verify: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" test` — it pushes a test row to `data/<user>.csv`. Confirm it appears on GitHub (and the Action runs).
+
+9. **Wrap up**: run `status` once more and summarize: tracking is now automatic — usage is recorded after every response and written to the chosen destination when a session ends.

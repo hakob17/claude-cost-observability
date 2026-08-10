@@ -1,0 +1,52 @@
+# Claude Code cost telemetry
+
+This repo is a **cost-tracking sink** for the [cost-observability](https://github.com/hakob17/claude-cost-observability)
+Claude Code plugin. Each developer's plugin appends usage rows to their own CSV
+under [`data/`](data/) and pushes. A GitHub Action then computes costs and
+writes **[`REPORT.md`](REPORT.md)** — the dashboard, rendered right here in GitHub.
+
+No external service, no database, no Azure app — just a private git repo your
+team already has access to.
+
+```
+plugin (each dev) ──push──▶ data/<developer>.csv
+                                   │  (GitHub Action: on push / manual)
+                                   ▼
+                            report.py + pricing.json ──▶ REPORT.md  ← the dashboard
+```
+
+## Setup (once, by an admin)
+
+1. **Create a private repo** in your org and copy these files into it
+   (`data/`, `report.py`, `pricing.json`, `.github/workflows/cost-report.yml`).
+   Commit and push so `main` exists.
+2. **Give the dev team push access** (a plain write role is enough — everyone
+   writes only their own `data/<name>.csv`, so pushes never conflict).
+3. That's it. The Action runs automatically on every push to `data/**`, and can
+   also be run by hand from the **Actions → Cost Report → Run workflow** button.
+
+## Each developer
+
+In Claude Code: `/cost-setup` → **GitHub repo** → paste this repo's clone URL.
+The plugin uses their existing git credentials — no new secrets. From then on,
+usage is pushed automatically at the end of each session.
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `data/<developer>.csv` | One append-only file per developer (written by the plugin) |
+| `report.py` | Reads all CSVs, dedupes by `row_id`, computes cost, writes `REPORT.md` |
+| `pricing.json` | **Central** price table — edit here + re-run the Action to reprice; no plugin redeploy |
+| `.github/workflows/cost-report.yml` | Runs `report.py` on push / on demand and commits `REPORT.md` |
+| `REPORT.md` | Generated dashboard: totals + breakdown by developer / project / model / day |
+
+## Notes
+
+- **Costs are API list-price equivalents** (tokens × pay-as-you-go rates). On
+  Claude subscription plans, real spend is the flat monthly fee — treat these as
+  a comparison/allocation metric, not an invoice.
+- **Only metadata is stored** — developer email, project folder name, model,
+  token counts, cost. No prompt or response content.
+- **Prefer analysis in Power BI?** Point it at this repo's `data/` folder (or a
+  scheduled clone) instead of, or alongside, `REPORT.md`.

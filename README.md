@@ -11,6 +11,7 @@ Three destinations, chosen during setup:
 | **Team sync server** | run the bundled [`server/`](server/README.md) app (FastAPI + Postgres/SQLite) | central DB + the **Cost Observatory** analytics dashboard with login and Excel/CSV/JSON export. Deployed on Railway: https://claude-cost-observability-production.up.railway.app |
 | **SharePoint List** | one-time Azure AD app registration by an admin | Microsoft 365 shops that want the data in SharePoint (Excel / Power BI on top) |
 | **OneDrive Excel** (compliance) | Azure AD app + admin creates one shared .xlsx | when compliance needs the record to be a literal Excel file in M365; all users append rows to one admin-owned workbook |
+| **GitHub repo** | admin creates a private repo from the `telemetry-repo/` template | reuses existing GitHub access — no Azure app, no sign-in; each dev pushes a per-user CSV, a GitHub Action renders `REPORT.md` |
 
 For the sync server, developers enter just the server URL and an ingest token
 during `/cost-setup` (or set `COST_OBS_SERVER_URL` / `COST_OBS_SERVER_TOKEN`
@@ -231,6 +232,21 @@ The guided setup first asks **where the data should go**:
    queue first, a busy/locked file causes a retry, **never a lost record**
    (important for a compliance store). The service/admin analyzes the workbook
    directly (Excel, Power Query, Power BI).
+
+**GitHub repo** (per-user CSV pushed to git; a GitHub Action renders the dashboard):
+1. **Admin, once:** create a private repo from the [`telemetry-repo/`](telemetry-repo/)
+   template (a `data/` folder, `report.py`, `pricing.json`, and the Cost Report
+   Action), push it, and give the team push access.
+2. **Each user:** `/cost-setup` → *GitHub repo* → paste the repo's clone URL. No
+   Azure app, no sign-in, no tenant/client IDs — the plugin pushes with the git
+   credentials the developer already has. (Or set `COST_OBS_GIT_REPO` in the
+   environment for zero-touch onboarding.)
+
+   Each session appends to the developer's own `data/<name>.csv` and pushes
+   (per-user files → no merge conflicts). On every push the Action recomputes
+   cost from `pricing.json` and rewrites **`REPORT.md`** — a dashboard rendered
+   right in GitHub (totals + breakdown by developer / project / model / day).
+   Prefer Power BI? Point it at the repo's `data/` folder instead.
 
 After that, tracking is fully automatic — nothing else to do. Even without
 running `/cost-setup` at all, the plugin defaults to local-CSV mode and starts

@@ -24,6 +24,7 @@ import argparse
 import csv
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -128,6 +129,8 @@ def destination(cfg):
     """
     if cfg.get("destination"):
         return cfg["destination"]
+    if cfg.get("git_repo") or os.environ.get("COST_OBS_GIT_REPO"):
+        return "git"
     if cfg.get("excel_share_url") or os.environ.get("COST_OBS_EXCEL_URL"):
         return "excel"
     if cfg.get("list_id"):
@@ -140,6 +143,14 @@ def destination(cfg):
 def excel_url(cfg):
     """The shared workbook's sharing link (env var wins, for VDI images)."""
     return os.environ.get("COST_OBS_EXCEL_URL") or cfg.get("excel_share_url")
+
+
+def git_settings(cfg):
+    """Telemetry git repo URL + branch + data subdir (env vars win)."""
+    url = os.environ.get("COST_OBS_GIT_REPO") or cfg.get("git_repo")
+    branch = os.environ.get("COST_OBS_GIT_BRANCH") or cfg.get("git_branch") or "main"
+    subdir = cfg.get("git_subdir") or "data"
+    return url, branch, subdir
 
 
 def server_settings(cfg):
@@ -618,6 +629,120 @@ def push_rows_excel(cfg, token, rows):
     return {"error": {"code": "locked", "message": "workbook busy after retries"}}
 
 
+# ------------------------------------------------------------------ git repo
+
+GIT_DIR = BASE_DIR / "repo"
+
+
+def run_git(args, cwd=None, timeout=120):
+    try:
+        r = subprocess.run(["git", *args], cwd=str(cwd) if cwd else None,
+                           capture_output=True, text=True, timeout=timeout)
+        return r.returncode, (r.stdout or "") + (r.stderr or "")
+    except (OSError, subprocess.SubprocessError) as e:
+        return 1, str(e)
+
+
+def ensure_git_clone(repo_url, branch):
+    """Return a local clone of the telemetry repo (clone on first use)."""
+    if (GIT_DIR / ".git").is_dir():
+        return GIT_DIR
+    if GIT_DIR.exists():
+        shutil.rmtree(GIT_DIR, ignore_errors=True)
+    GIT_DIR.parent.mkdir(parents=True, exist_ok=True)
+    rc, out = run_git(["clone", "--branch", branch, repo_url, str(GIT_DIR)])
+    if rc != 0:  # branch may not exist yet — try a plain clone
+        rc, out = run_git(["clone", repo_url, str(GIT_DIR)])
+    if rc != 0:
+        log(f"git clone failed: {out.strip()[:200]}")
+        return None
+    return GIT_DIR
+
+
+def _safe_name(s):
+    return "".join(c if (c.isalnum() or c in "._-@") else "_" for c in s) or "unknown"
+
+
+def _flush_git_batch(cfg, files, verbose=False):
+    """Append all queued rows to the user's own CSV, commit, and push.
+
+    Each attempt resets the clone to the remote HEAD first, so it's idempotent:
+    a push race just retries cleanly (no duplicate commits), and a hard failure
+    discards the local commit and re-queues the rows (no data loss). Per-user
+    files mean two users' pushes never touch the same file — no merge conflicts.
+    """
+    repo_url, branch, subdir = git_settings(cfg)
+    if not repo_url:
+        log("flush skipped: git repo not configured")
+        if verbose:
+            print("Git repo not configured — run /cost-setup or set COST_OBS_GIT_REPO.")
+        return 0
+    clone = ensure_git_clone(repo_url, branch)
+    if not clone:
+        if verbose:
+            print("Could not clone the telemetry repo — check the URL and your git access.")
+        return 0
+
+    claimed = []
+    for p in files:
+        inflight = p.with_suffix(".inflight")
+        try:
+            os.rename(p, inflight)
+        except OSError:
+            continue
+        row = load_json(inflight)
+        if row:
+            claimed.append((inflight, p, row))
+        else:
+            inflight.unlink(missing_ok=True)
+    if not claimed:
+        return 0
+
+    user = user_identity(cfg)
+    rel = f"{subdir}/{_safe_name(user)}.csv"
+    pushed = False
+    for attempt in range(4):
+        run_git(["fetch", "origin", branch], clone)
+        run_git(["reset", "--hard", f"origin/{branch}"], clone)
+        run_git(["clean", "-fd"], clone)
+        path = clone / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        header = not path.exists() or path.stat().st_size == 0
+        with open(path, "a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=EXCEL_COLUMNS, extrasaction="ignore")
+            if header:
+                w.writeheader()
+            for _, _, row in claimed:
+                w.writerow(row)
+        run_git(["add", rel], clone)
+        run_git(["-c", f"user.email={user}", "-c", "user.name=cost-observability",
+                 "commit", "-m", f"usage: {_safe_name(user)} +{len(claimed)} row(s)"], clone)
+        rc, out = run_git(["push", "origin", f"HEAD:{branch}"], clone)
+        if rc == 0:
+            pushed = True
+            break
+        time.sleep(1.5 * (attempt + 1))  # lost a push race — reset & retry
+
+    if pushed:
+        for inflight, _, _ in claimed:
+            inflight.unlink(missing_ok=True)
+        log(f"pushed {len(claimed)} row(s) to git repo ({rel})")
+        if verbose:
+            print(f"Pushed {len(claimed)} row(s) to {rel} in the telemetry repo.")
+        return len(claimed)
+    # Give up this round: discard the local commit, re-queue the rows.
+    run_git(["reset", "--hard", f"origin/{branch}"], clone)
+    for inflight, p, _ in claimed:
+        try:
+            os.rename(inflight, p)
+        except OSError:
+            pass
+    log(f"git push failed; {len(claimed)} row(s) re-queued: {out.strip()[:200]}")
+    if verbose:
+        print(f"Git push failed — {len(claimed)} row(s) stay queued for retry.")
+    return 0
+
+
 def reclaim_inflight(max_age_sec=120):
     """Recover rows orphaned as *.inflight by a crash/power-loss mid-upload.
 
@@ -691,6 +816,8 @@ def flush_queue(verbose=False):
                 print("Not signed in — run: track_usage.py login")
             return 0
         return _flush_excel_batch(cfg, token, files, verbose)
+    elif dest == "git":
+        return _flush_git_batch(cfg, files, verbose)
 
     pushed = 0
     for p in files:
@@ -846,6 +973,14 @@ def cmd_test(_args):
             raise SystemExit(f"Test write FAILED: {err}")
         print(f"Test row written to {local_file(cfg)}")
         return 0
+    if destination(cfg) == "git":
+        row["row_id"] = uuid.uuid4().hex
+        QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+        save_json(QUEUE_DIR / f"test-{row['row_id'][:8]}.json", row)
+        if flush_queue(verbose=True):
+            print("Test row pushed to the telemetry repo — check data/<you>.csv on GitHub.")
+            return 0
+        raise SystemExit("Git push failed — see ~/.claude/cost-observability/log.txt")
     if destination(cfg) == "server":
         url, tok = server_settings(cfg)
         if not url or not tok:
@@ -1072,6 +1207,13 @@ def cmd_status(_args):
         print(f"  workbook    : {'resolved' if cfg.get('excel_item_id') else 'not resolved yet'}")
         tok = load_json(TOKENS_PATH)
         print(f"Auth        : {'signed in' if tok else 'not signed in (run: track_usage.py login)'}")
+    elif dest == "git":
+        url, branch, subdir = git_settings(cfg)
+        src = " (from env)" if os.environ.get("COST_OBS_GIT_REPO") else ""
+        print(f"  git_repo    : {(url or 'NOT SET') + src}")
+        print(f"  branch      : {branch}   subdir: {subdir}")
+        print(f"  clone       : {'present' if (GIT_DIR / '.git').is_dir() else 'not cloned yet'}")
+        print("Auth        : uses your existing git credentials (SSH key / PAT / credential manager)")
     else:
         for k in ("tenant_id", "client_id", "site_id", "list_id"):
             print(f"  {k:<12}: {'set' if cfg.get(k) else 'NOT SET'}")
