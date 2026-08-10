@@ -12,8 +12,14 @@ team already has access to.
 plugin (each dev) ──push──▶ data/<developer>.csv
                                    │  (GitHub Action: on push / manual)
                                    ▼
-                            report.py + pricing.json ──▶ REPORT.md  ← the dashboard
+                     report.py + pricing.json ──▶ REPORT.md   (static, view on GitHub)
+                                              └──▶ report.html (sortable, download & open)
 ```
+
+Two views, both committed by the Action:
+- **`REPORT.md`** — static tables rendered right here on GitHub (pre-sorted by cost). GitHub strips JavaScript from Markdown, so it can't be interactive.
+- **`report.html`** — the **sortable** version: click any column header to sort, grouped by developer / project / model / day. Download it and open in a browser (it's self-contained, works offline). It stays private to repo members — it is **not** GitHub Pages, nothing is published publicly.
+- For editing/filtering, open the `data/` CSVs in **Excel or Power BI**.
 
 ## Setup (once, by an admin)
 
@@ -36,10 +42,11 @@ usage is pushed automatically at the end of each session.
 | File | Purpose |
 |---|---|
 | `data/<developer>.csv` | One append-only file per developer (written by the plugin) |
-| `report.py` | Reads all CSVs, dedupes by `row_id`, computes cost, writes `REPORT.md` |
+| `report.py` | Reads all CSVs, dedupes by `row_id`, computes cost, writes `REPORT.md` + `report.html` |
 | `pricing.json` | **Central** price table — edit here + re-run the Action to reprice; no plugin redeploy |
-| `.github/workflows/cost-report.yml` | Runs `report.py` on push / on demand and commits `REPORT.md` |
-| `REPORT.md` | Generated dashboard: totals + breakdown by developer / project / model / day |
+| `.github/workflows/cost-report.yml` | Runs `report.py` on push / on demand and commits both report files |
+| `REPORT.md` | Generated dashboard (static): totals + breakdown by developer / project / model / day |
+| `report.html` | Generated dashboard (**sortable**): same breakdowns, click a header to sort — download & open |
 
 ## Notes
 

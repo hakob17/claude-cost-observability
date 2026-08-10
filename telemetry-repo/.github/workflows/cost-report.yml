@@ -25,13 +25,13 @@ jobs:
           python-version: "3.12"
       - name: Build cost report
         run: python report.py
-      - name: Commit REPORT.md
+      - name: Commit report
         run: |
           git config user.name "cost-report-bot"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add REPORT.md
+          git add REPORT.md report.html
           if git diff --cached --quiet; then
-            echo "No change to REPORT.md."
+            echo "No change to report."
           else
             git commit -m "Update cost report [skip ci]"
             git push
