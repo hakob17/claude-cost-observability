@@ -1,38 +1,69 @@
 name: Cost Report
 
-# Runs when any developer pushes new usage data, or manually from the Actions tab.
+# Runs when developers push new usage data, or manually from the Actions tab.
 on:
   push:
     paths:
       - "data/**"
   workflow_dispatch:
 
+# contents: write  -> push the report branch;  pull-requests: write -> open the PR.
 permissions:
   contents: write
+  pull-requests: write
 
-# Don't let concurrent pushes race the report commit.
 concurrency:
   group: cost-report
   cancel-in-progress: false
+
+env:
+  BASE_BRANCH: main          # PR target — change if your default branch differs
+  REPORT_BRANCH: cost-report # reused each run, so there is one PR, not many
 
 jobs:
   report:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Build cost report
+
+      - name: Build report from the latest data
         run: python report.py
-      - name: Commit report
+
+      - name: Open or update the report PR
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git config user.name "cost-report-bot"
+          set -e
+          git config user.name  "cost-report-bot"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Keep the freshly generated report; the report branch only ever
+          # contains these two files on top of BASE_BRANCH (clean PR diff).
+          mkdir -p /tmp/report
+          cp REPORT.md report.html /tmp/report/ 2>/dev/null || true
+
+          git fetch origin "$BASE_BRANCH"
+          git checkout -B "$REPORT_BRANCH" "origin/$BASE_BRANCH"
+          cp /tmp/report/REPORT.md /tmp/report/report.html ./ 2>/dev/null || true
           git add REPORT.md report.html
+
           if git diff --cached --quiet; then
-            echo "No change to report."
-          else
-            git commit -m "Update cost report [skip ci]"
-            git push
+            echo "Report unchanged — nothing to open a PR for."
+            exit 0
+          fi
+
+          git commit -m "Update cost report [skip ci]"
+          git push --force origin "$REPORT_BRANCH"
+
+          # Open a PR only if one isn't already open (it updates in place otherwise).
+          if ! gh pr view "$REPORT_BRANCH" --json state --jq .state 2>/dev/null | grep -q OPEN; then
+            gh pr create --base "$BASE_BRANCH" --head "$REPORT_BRANCH" \
+              --title "Update cost report" \
+              --body "Automated cost report — \`REPORT.md\` (static) + \`report.html\` (sortable). Review and merge to publish."
           fi

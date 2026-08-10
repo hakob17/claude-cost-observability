@@ -37,6 +37,28 @@ In Claude Code: `/cost-setup` → **GitHub repo** → paste this repo's clone UR
 The plugin uses their existing git credentials — no new secrets. From then on,
 usage is pushed automatically at the end of each session.
 
+## Protected `main` (branch protection)
+
+The Action **never pushes to `main`** — it pushes the generated report to a
+`cost-report` branch and opens/updates a **pull request** (set `BASE_BRANCH` /
+`REPORT_BRANCH` at the top of the workflow if your names differ). So report
+publishing already respects a protected default branch.
+
+But branch protection that blocks *all* direct pushes to `main` also blocks the
+**plugin's** data push. If that's your case, point the plugin at a dedicated,
+unprotected **data branch** instead of `main`:
+
+- Each developer sets `"git_branch": "usage-data"` in their config (or the
+  `COST_OBS_GIT_BRANCH=usage-data` env var). The plugin then pushes each
+  `data/<user>.csv` to `usage-data`, which needs to allow pushes from the team.
+- Create that branch once (`git checkout -b usage-data && git push -u origin usage-data`).
+- The Action already triggers on any `data/**` push, reads the latest data, and
+  opens its PR to `BASE_BRANCH` — so the data lives on `usage-data`, the report
+  PR targets `main`, and `main` is never pushed to directly.
+
+If your `main` allows the team (or the plugin's push identity) to push data
+directly, you can skip all this and leave the plugin on `main`.
+
 ## Files
 
 | File | Purpose |
