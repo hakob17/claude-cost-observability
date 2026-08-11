@@ -146,9 +146,14 @@ def excel_url(cfg):
 
 
 def git_settings(cfg):
-    """Telemetry git repo URL + branch + data subdir (env vars win)."""
+    """Telemetry git repo URL + branch + data subdir (env vars win).
+
+    Defaults to the 'telemetry' branch, not 'main' — pushes to main are often
+    restricted by branch protection, and the telemetry branch collects data
+    without touching main.
+    """
     url = os.environ.get("COST_OBS_GIT_REPO") or cfg.get("git_repo")
-    branch = os.environ.get("COST_OBS_GIT_BRANCH") or cfg.get("git_branch") or "main"
+    branch = os.environ.get("COST_OBS_GIT_BRANCH") or cfg.get("git_branch") or "telemetry"
     subdir = cfg.get("git_subdir") or "data"
     return url, branch, subdir
 
@@ -702,8 +707,15 @@ def _flush_git_batch(cfg, files, verbose=False):
     rel = f"{subdir}/{_safe_name(user)}.csv"
     pushed = False
     for attempt in range(4):
-        run_git(["fetch", "origin", branch], clone)
-        run_git(["reset", "--hard", f"origin/{branch}"], clone)
+        rc_fetch, _ = run_git(["fetch", "origin", branch], clone)
+        if rc_fetch == 0:
+            # Branch exists: reset onto it (switch + discard any prior attempt).
+            run_git(["checkout", "-B", branch, f"origin/{branch}"], clone)
+        else:
+            # Branch doesn't exist yet: create it from the cloned default branch
+            # so it carries report.py / pricing.json / the Action, and pushes to
+            # it trigger the workflow. The first push establishes the branch.
+            run_git(["checkout", "-B", branch], clone)
         run_git(["clean", "-fd"], clone)
         path = clone / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -730,8 +742,8 @@ def _flush_git_batch(cfg, files, verbose=False):
         if verbose:
             print(f"Pushed {len(claimed)} row(s) to {rel} in the telemetry repo.")
         return len(claimed)
-    # Give up this round: discard the local commit, re-queue the rows.
-    run_git(["reset", "--hard", f"origin/{branch}"], clone)
+    # Give up this round: re-queue the rows (next flush re-fetches & resets the
+    # clone via checkout -B, so no cleanup of the local commit is needed here).
     for inflight, p, _ in claimed:
         try:
             os.rename(inflight, p)

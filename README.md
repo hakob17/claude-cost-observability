@@ -243,10 +243,13 @@ The guided setup first asks **where the data should go**:
    environment for zero-touch onboarding.)
 
    Each session appends to the developer's own `data/<name>.csv` and pushes
-   (per-user files → no merge conflicts). On every push the Action recomputes
-   cost from `pricing.json` and rewrites **`REPORT.md`** — a dashboard rendered
-   right in GitHub (totals + breakdown by developer / project / model / day).
-   Prefer Power BI? Point it at the repo's `data/` folder instead.
+   (per-user files → no merge conflicts). The plugin pushes to the **`telemetry`
+   branch by default** (not `main`, which is usually protected) — it auto-creates
+   that branch from the default branch on first push. On every push the Action
+   recomputes cost from `pricing.json` and opens a **PR** with **`REPORT.md`**
+   (static, in-GitHub) plus **`report.html`** (sortable — download & open),
+   broken down by developer / project / model / day. Prefer Power BI? Point it
+   at the repo's `data/` folder instead.
 
 After that, tracking is fully automatic — nothing else to do. Even without
 running `/cost-setup` at all, the plugin defaults to local-CSV mode and starts

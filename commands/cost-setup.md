@@ -4,6 +4,8 @@ description: One-time setup for the cost-observability plugin (choose local file
 
 Walk the user through setting up the cost-observability plugin. The tracker script is at `${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py`; its config lives at `~/.claude/cost-observability/config.json`.
 
+> **Python launcher:** commands below are written with `python3`. On **Windows** a standard install provides `python`, not `python3` — use `python` there. Detect once at the start (`python3 --version || python --version`) and use whichever works for every command below. (The automatic hooks already fall back `python3 → python`; this only matters for the manual commands you run here.)
+
 Follow these steps in order:
 
 1. **Check current state**: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" status` and show the result.
@@ -53,7 +55,8 @@ Follow these steps in order:
 
 8. **If "GitHub repo" was selected**:
    - **Admin prerequisite (once):** create a private repo from the `telemetry-repo/` template in the plugin repo (contains `data/`, `report.py`, `pricing.json`, and the Action), push it so `main` exists, and give the dev team push access.
-   - **Each user:** check env first — if `COST_OBS_GIT_REPO` is set, just write `destination: "git"`. Otherwise ask for the repo's **clone URL** (SSH like `git@github.com:org/telemetry.git`, or HTTPS) and write config: `destination: "git"`, `git_repo: "<url>"`, optional `git_branch` (default `main`), optional `user_email`, `enabled: true`.
+   - **Each user:** check env first — if `COST_OBS_GIT_REPO` is set, just write `destination: "git"`. Otherwise ask for the repo's **clone URL** (SSH like `git@github.com:org/telemetry.git`, or HTTPS) and write config: `destination: "git"`, `git_repo: "<url>"`, optional `user_email`, `enabled: true`.
+   - **Branch:** the plugin pushes to the **`telemetry` branch by default** (not `main`, since `main` is usually protected). It auto-creates that branch from the default branch on the first push, so pushes there also carry the report Action. Only set `git_branch` if your team uses a different data branch name.
    - No sign-in, no tenant/client IDs — the plugin uses the user's existing git credentials (SSH key / PAT / credential manager). Confirm the user can already `git clone`/`push` that repo.
    - Verify: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" test` — it pushes a test row to `data/<user>.csv`. Confirm it appears on GitHub (and the Action runs).
 
