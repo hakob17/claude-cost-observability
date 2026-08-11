@@ -57,7 +57,11 @@ Follow these steps in order:
    - **Admin prerequisite (once):** create a private repo from the `telemetry-repo/` template in the plugin repo (contains `data/`, `report.py`, `pricing.json`, and the Action), push it so `main` exists, and give the dev team push access.
    - **Each user:** check env first — if `COST_OBS_GIT_REPO` is set, just write `destination: "git"`. Otherwise ask for the repo's **clone URL** (SSH like `git@github.com:org/telemetry.git`, or HTTPS) and write config: `destination: "git"`, `git_repo: "<url>"`, optional `user_email`, `enabled: true`.
    - **Branch:** the plugin pushes to the **`telemetry` branch by default** (not `main`, since `main` is usually protected). It auto-creates that branch from the default branch on the first push, so pushes there also carry the report Action. Only set `git_branch` if your team uses a different data branch name.
-   - No sign-in, no tenant/client IDs — the plugin uses the user's existing git credentials (SSH key / PAT / credential manager). Confirm the user can already `git clone`/`push` that repo.
-   - Verify: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" test` — it pushes a test row to `data/<user>.csv`. Confirm it appears on GitHub (and the Action runs).
+   - No sign-in, no tenant/client IDs — the plugin uses the user's existing git credentials. **For fully automatic sync (no prompts), those credentials must be cached non-interactively:**
+     - **HTTPS (easiest on Windows):** use an `https://github.com/...` clone URL. The first `git push` (or `/cost-sync`) triggers Git Credential Manager once to sign in / enter a PAT; it then caches the token and every later push is silent.
+     - **SSH:** use a passphrase-less key, or load your key into `ssh-agent` at login.
+     The plugin runs git with prompts disabled (`GIT_TERMINAL_PROMPT=0`), so if credentials aren't cached it **fails fast and re-queues** (never hangs the session) — but nothing syncs until credentials are set up. Confirm the user can already run `git push` to the repo without being prompted.
+   - **Auto-sync cadence:** rows sync at session start, at session end, and about every 90 seconds during an active session — no manual step. `/cost-sync` forces a push immediately.
+   - Verify: run `git push` once manually to prime credentials, then `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/track_usage.py" test` — it pushes a test row to `data/<user>.csv`. Confirm it appears on GitHub (and the Action runs). If it fails, check `~/.claude/cost-observability/log.txt`.
 
 9. **Wrap up**: run `status` once more and summarize: tracking is now automatic — usage is recorded after every response and written to the chosen destination when a session ends.

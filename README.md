@@ -242,6 +242,13 @@ The guided setup first asks **where the data should go**:
    credentials the developer already has. (Or set `COST_OBS_GIT_REPO` in the
    environment for zero-touch onboarding.)
 
+   > **For silent auto-sync, git credentials must be cached** — use an HTTPS URL
+   > and let Git Credential Manager store a PAT on first push (Windows), or a
+   > passphrase-less SSH key / `ssh-agent`. The plugin runs git with prompts
+   > disabled (`GIT_TERMINAL_PROMPT=0`), so it never hangs asking you to hit
+   > enter — if credentials aren't cached it just re-queues and logs the error.
+   > Sync happens at session start, at session end, and ~every 90s while active.
+
    Each session appends to the developer's own `data/<name>.csv` and pushes
    (per-user files → no merge conflicts). The plugin pushes to the **`telemetry`
    branch by default** (not `main`, which is usually protected) — it auto-creates

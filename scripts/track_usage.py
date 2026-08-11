@@ -43,6 +43,10 @@ STATE_DIR = BASE_DIR / "state"
 QUEUE_DIR = BASE_DIR / "queue"
 LEDGER_PATH = BASE_DIR / "ledger.jsonl"
 LOG_PATH = BASE_DIR / "log.txt"
+FLUSH_STAMP = BASE_DIR / "last_flush"
+
+# How often network destinations (git/server) sync mid-session, in seconds.
+FLUSH_INTERVAL = 90
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 # Sites.ReadWrite.All -> SharePoint List; Files.ReadWrite.All -> a shared
@@ -640,9 +644,19 @@ GIT_DIR = BASE_DIR / "repo"
 
 
 def run_git(args, cwd=None, timeout=120):
+    # Fully non-interactive: the hook runs unattended, so git must never block
+    # waiting for a username/password/passphrase prompt (which would hang the
+    # session or force the user to keep hitting enter). If credentials aren't
+    # already cached, git fails fast and the rows stay queued for next time.
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"       # no terminal credential prompt
+    env["GCM_INTERACTIVE"] = "never"       # Git Credential Manager: no popups
+    env["SSH_ASKPASS"] = ""                # no GUI askpass for SSH
+    env.setdefault("GIT_SSH_COMMAND",
+                   "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new")
     try:
         r = subprocess.run(["git", *args], cwd=str(cwd) if cwd else None,
-                           capture_output=True, text=True, timeout=timeout)
+                           capture_output=True, text=True, timeout=timeout, env=env)
         return r.returncode, (r.stdout or "") + (r.stderr or "")
     except (OSError, subprocess.SubprocessError) as e:
         return 1, str(e)
@@ -1051,6 +1065,24 @@ def cmd_create_excel(args):
 
 # ------------------------------------------------------------------ hook
 
+def _flush_due(interval=FLUSH_INTERVAL):
+    """True if it's been at least `interval` seconds since the last flush."""
+    try:
+        return time.time() - FLUSH_STAMP.stat().st_mtime >= interval
+    except OSError:
+        return True  # never flushed
+
+
+def _flush_and_stamp():
+    n = flush_queue()
+    try:
+        BASE_DIR.mkdir(parents=True, exist_ok=True)
+        FLUSH_STAMP.touch()
+    except OSError:
+        pass
+    return n
+
+
 def handle_hook():
     try:
         payload = json.load(sys.stdin)
@@ -1067,7 +1099,7 @@ def handle_hook():
         # transcript even exists. This is the outage-recovery path.
         if event == "SessionStart":
             sweep_stale(cfg)              # enqueue deltas from abandoned sessions
-            flush_queue()                 # reclaims stranded .inflight + retries queue
+            _flush_and_stamp()            # reclaims stranded .inflight + retries queue
             return 0
 
         # Stop / SessionEnd need the transcript.
@@ -1084,12 +1116,20 @@ def handle_hook():
         enqueue_session(session_id, cfg)
         if event == "SessionEnd":
             sweep_stale(cfg)
-        # Local CSV appends are instant — flush every turn. Network uploads
-        # (server / SharePoint) flush at SessionEnd (and at the next
-        # SessionStart) to keep the per-turn hook fast.
-        if destination(cfg) == "local" or event == "SessionEnd":
-            if QUEUE_DIR.is_dir() and any(QUEUE_DIR.glob("*.json")):
-                flush_queue()
+
+        dest = destination(cfg)
+        # When to push to the destination:
+        #   - local CSV: every turn (instant, no network)
+        #   - SessionEnd: always
+        #   - git/server: throttled mid-session (every FLUSH_INTERVAL) so costs
+        #     appear during a long session, not only when it ends
+        flush_now = (
+            dest == "local"
+            or event == "SessionEnd"
+            or (dest in ("git", "server") and _flush_due())
+        )
+        if flush_now and QUEUE_DIR.is_dir() and any(QUEUE_DIR.glob("*.json")):
+            _flush_and_stamp()
     except Exception as e:  # never break the user's session
         log(f"hook error ({event}): {type(e).__name__}: {e}")
     return 0
